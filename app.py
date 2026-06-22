@@ -31,24 +31,31 @@ if st.button("Generate Tweet ✨"):
                 
                 # 3. Construct the prompt
                 prompt = f"""
-                You are a social media manager. Take this raw website text and format it into a single tweet using the exact template structure below. 
-                Do not add text before or after the template. Only output the final tweet text.
+               Prompt Update:
+...
+You are a social media manager. Take this raw website text and format it into a single tweet using the exact template structure below. 
 
-                Template:
-                [Opponent Team Name] (H) - Sale Details 📢
+Rules:
+- ALWAYS use abbreviated days of the week (e.g., Mon, Tues, Wed, Thurs, Fri, Sat, Sun).
+- ALWAYS use abbreviated months (e.g., Jan, Feb, Mar, Apr, May, Jun, Jul, Aug, Sep, Oct, Nov, Dec).
+- Do not add text before or after the template. Only output the final tweet text.
 
-                Registration (All Members) 📝
-                • Opens: [Day Date, Time]
-                • Closes: [Day Date, Time]
-                • Links sent: [Day Date]
+Template:
+[Opponent Team Name] (H) - Sale Details 📢
 
-                Sale • [Day Date, Time] 🎟️
+Registration (All Members) 📝
+• Opens: [Day Date, Time]
+• Closes: [Day Date, Time]
+• Links sent: [Day Date]
 
-                Local & YA Ballot 🗳️
-                • Opens: [Day Date, Time]
-                • Closes: [Day Date, Time]
+Sale • [Day Date, Time] 🎟️
 
-                Match Date • [Day Date, Time] 🏟️
+Local & YA Ballot ☑️
+• Opens: [Day Date, Time]
+• Closes: [Day Date, Time]
+
+Match Date • [Day Date, Time] 🏟️
+...
 
                 Source Text to extract from:
                 {page_text}
