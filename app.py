@@ -27,7 +27,7 @@ if st.button("Generate Tweet ✨"):
 
                 # 2. Configure Gemini
                 genai.configure(api_key=api_key_input)
-                model = genai.GenerativeModel('gemini-pro')
+                model = genai.GenerativeModel('gemini-2.5-flash')
                 
                 # 3. Construct the prompt
                 prompt = f"""
