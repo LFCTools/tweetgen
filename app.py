@@ -53,9 +53,10 @@ if st.button("Generate Tweet ✨"):
 
                 Sale • [Day Date, Time] 🎟️
 
-                Local & YA Ballot ☑️
+                Local & YA Ballot 🗳️
                 • Opens: [Day Date, Time]
                 • Closes: [Day Date, Time]
+                • Results:
 
                 Match Date • [Day Date, Time] 🏟️
 
