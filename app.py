@@ -37,14 +37,14 @@ if st.button("Generate Tweet ✨"):
                 Template:
                 [Opponent Team Name] (H) - Sale Details 📢
 
-                Registration (All Members) 🗳️
+                Registration (All Members) 📝
                 • Opens: [Day Date, Time]
                 • Closes: [Day Date, Time]
                 • Links sent: [Day Date]
 
                 Sale • [Day Date, Time] 🎟️
 
-                Local Ballot 📌
+                Local & YA Ballot 🗳️
                 • Opens: [Day Date, Time]
                 • Closes: [Day Date, Time]
 
