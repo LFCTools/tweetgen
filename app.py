@@ -4,7 +4,6 @@ import requests
 from bs4 import BeautifulSoup
 import urllib.parse
 import re
-import base64
 from datetime import datetime, timedelta
 
 # --- HELPER FUNCTIONS FOR CALENDAR LINKS ---
@@ -44,46 +43,6 @@ def format_gcal_date(dt, is_all_day=False):
         start_iso = dt.strftime("%Y%m%dT%H%M%S")
         end_iso = (dt + timedelta(hours=1)).strftime("%Y%m%dT%H%M%S")
         return f"{start_iso}/{end_iso}"
-
-def generate_gcal_subscribe_url(events):
-    """Generates a base64 encoded webcal data URL string to force open Google Calendar Subscription."""
-    ics_lines = [
-        "BEGIN:VCALENDAR",
-        "VERSION:2.0",
-        "PRODID:-//LFC Ticket Generator//EN",
-        "CALSCALE:GREGORIAN",
-        "METHOD:PUBLISH"
-    ]
-    
-    for ev in events:
-        dt = parse_to_datetime(ev["time"])
-        if not dt: continue
-        
-        ics_lines.append("BEGIN:VEVENT")
-        ics_lines.append(f"SUMMARY:{ev['name']}")
-        
-        if ev["all_day"]:
-            start_str = dt.strftime("%Y%m%d")
-            end_str = (dt + timedelta(days=1)).strftime("%Y%m%d")
-            ics_lines.append(f"DTSTART;VALUE=DATE:{start_str}")
-            ics_lines.append(f"DTEND;VALUE=DATE:{end_str}")
-        else:
-            start_str = dt.strftime("%Y%m%dT%H%M%S")
-            end_str = (dt + timedelta(hours=1)).strftime("%Y%m%dT%H%M%S")
-            ics_lines.append(f"DTSTART:{start_str}")
-            ics_lines.append(f"DTEND:{end_str}")
-            
-        ics_lines.append("END:VEVENT")
-        
-    ics_lines.append("END:VCALENDAR")
-    ics_string = "\n".join(ics_lines)
-    
-    # Base64 encode the string payload to construct a clean target link
-    b64_payload = base64.b64encode(ics_string.encode('utf-8')).decode('utf-8')
-    data_url = f"data:text/calendar;charset=utf-8;base64,{b64_payload}"
-    
-    # Route it into Google Calendar's dynamic web subscription service
-    return f"https://www.google.com/calendar/render?cid={urllib.parse.quote(data_url)}"
 
 # --- STREAMLIT CONFIG ---
 st.set_page_config(page_title="LFC Tweet Generator", page_icon="⚽")
@@ -204,25 +163,7 @@ Match Date • {m_date} 🏟️"""
             {"label": "8. Match Day", "name": f"LFC v {m_name} - Match Date", "time": m_date, "all_day": False}
         ]
 
-        # One-click Master URL Generation
-        try:
-            subscribe_url = generate_gcal_subscribe_url(events)
-            st.markdown(
-                f"""
-                <a href="{subscribe_url}" target="_blank" style="text-decoration: none;">
-                    <button style="background-color: #E60000; color: white; font-weight: bold; border: none; padding: 12px 24px; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; width: 100%;">
-                        📅 🔗 Click Here to Add ALL 8 Events directly to Google Calendar
-                    </button>
-                </a>
-                """,
-                unsafe_allow_html=True
-            )
-        except Exception:
-            st.warning("Could not bundle master calendar link.")
-
-        st.caption("Or choose individual web links manually below:")
-
-        # Fallback individual rows format
+        # Generate individual links
         for ev in events:
             if ev["time"] and ev["time"] != "TBA" and not ev["time"].startswith("["):
                 dt_obj = parse_to_datetime(ev["time"])
