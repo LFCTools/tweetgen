@@ -4,14 +4,14 @@ import requests
 from bs4 import BeautifulSoup
 import urllib.parse
 import re
+import base64
 from datetime import datetime, timedelta
 
 # --- HELPER FUNCTIONS FOR CALENDAR LINKS ---
-def format_gcal_date(date_str, is_all_day=False):
-    """Formats 'Wed 19 Nov, 10:00am' into Google Calendar URL DateTime structure."""
+def parse_to_datetime(date_str):
+    """Converts a string like 'Wed 19 Nov, 10:00am' into a standard Python datetime object."""
     if not date_str or date_str == "TBA" or "[" in date_str:
         return None
-        
     try:
         current_year = 2026
         clean_str = date_str.replace(',', '')
@@ -22,33 +22,73 @@ def format_gcal_date(date_str, is_all_day=False):
         day = int(parts[1])
         month_str = parts[2][:3]
         
-        if is_all_day or len(parts) < 4:
-            # All Day Event Format: YYYYMMDD/YYYYMMDD
-            dt_str = f"{day} {month_str} {current_year}"
-            dt = datetime.strptime(dt_str, "%d %b %Y")
-            date_only = dt.strftime("%Y%m%d")
-            end_dt = dt + timedelta(days=1)
-            end_date_only = end_dt.strftime("%Y%m%d")
-            return f"{date_only}/{end_date_only}"
+        if len(parts) < 4:
+            # All Day parsing default time
+            dt_str = f"{day} {month_str} {current_year} 09:00am"
         else:
-            # Specific Time Format
             time_str = parts[3].lower()
             dt_str = f"{day} {month_str} {current_year} {time_str}"
-            dt = datetime.strptime(dt_str, "%d %b %Y %I:%M%p" if ":" in time_str else "%d %b %Y %I%p")
             
-            start_iso = dt.strftime("%Y%m%dT%H%M%S")
-            end_dt = dt + timedelta(hours=1) 
-            end_iso = end_dt.strftime("%Y%m%dT%H%M%S")
-            return f"{start_iso}/{end_iso}"
-            
-    except Exception as e:
+        return datetime.strptime(dt_str, "%d %b %Y %I:%M%p" if ":" in dt_str.split()[-1] else "%d %b %Y %I%p")
+    except Exception:
         return None
+
+def format_gcal_date(dt, is_all_day=False):
+    """Formats datetime object into Google Calendar URL DateTime structure."""
+    if not dt: return None
+    if is_all_day:
+        date_only = dt.strftime("%Y%m%d")
+        end_date_only = (dt + timedelta(days=1)).strftime("%Y%m%d")
+        return f"{date_only}/{end_date_only}"
+    else:
+        start_iso = dt.strftime("%Y%m%dT%H%M%S")
+        end_iso = (dt + timedelta(hours=1)).strftime("%Y%m%dT%H%M%S")
+        return f"{start_iso}/{end_iso}"
+
+def generate_gcal_subscribe_url(events):
+    """Generates a base64 encoded webcal data URL string to force open Google Calendar Subscription."""
+    ics_lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//LFC Ticket Generator//EN",
+        "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH"
+    ]
+    
+    for ev in events:
+        dt = parse_to_datetime(ev["time"])
+        if not dt: continue
+        
+        ics_lines.append("BEGIN:VEVENT")
+        ics_lines.append(f"SUMMARY:{ev['name']}")
+        
+        if ev["all_day"]:
+            start_str = dt.strftime("%Y%m%d")
+            end_str = (dt + timedelta(days=1)).strftime("%Y%m%d")
+            ics_lines.append(f"DTSTART;VALUE=DATE:{start_str}")
+            ics_lines.append(f"DTEND;VALUE=DATE:{end_str}")
+        else:
+            start_str = dt.strftime("%Y%m%dT%H%M%S")
+            end_str = (dt + timedelta(hours=1)).strftime("%Y%m%dT%H%M%S")
+            ics_lines.append(f"DTSTART:{start_str}")
+            ics_lines.append(f"DTEND:{end_str}")
+            
+        ics_lines.append("END:VEVENT")
+        
+    ics_lines.append("END:VCALENDAR")
+    ics_string = "\n".join(ics_lines)
+    
+    # Base64 encode the string payload to construct a clean target link
+    b64_payload = base64.b64encode(ics_string.encode('utf-8')).decode('utf-8')
+    data_url = f"data:text/calendar;charset=utf-8;base64,{b64_payload}"
+    
+    # Route it into Google Calendar's dynamic web subscription service
+    return f"https://www.google.com/calendar/render?cid={urllib.parse.quote(data_url)}"
 
 # --- STREAMLIT CONFIG ---
 st.set_page_config(page_title="LFC Tweet Generator", page_icon="⚽")
 st.title("⚽ LFC Ticket Tweet & Calendar Generator")
 
-# Initialize session state variables to hold data between form submissions
 if "extracted_data" not in st.session_state:
     st.session_state.extracted_data = None
 
@@ -61,7 +101,6 @@ if st.button("1. Scan Page & Extract Data 🔍"):
     else:
         with st.spinner("Scraping LFC and parsing with Gemini..."):
             try:
-                # Scrape Content
                 headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
                 response = requests.get(url_input, headers=headers, timeout=5)
                 soup = BeautifulSoup(response.text, 'html.parser')
@@ -69,7 +108,6 @@ if st.button("1. Scan Page & Extract Data 🔍"):
                     script.extract()
                 page_text = " ".join(soup.get_text().split())[:3000]
 
-                # Run Gemini with strict structured JSON output rules
                 genai.configure(api_key=api_key_input)
                 model = genai.GenerativeModel('gemini-2.5-flash')
                 
@@ -97,8 +135,6 @@ if st.button("1. Scan Page & Extract Data 🔍"):
                 """
                 
                 ai_response = model.generate_content(prompt)
-                
-                # Sanitize response string to match valid JSON format
                 json_text = ai_response.text.strip().replace("```json", "").replace("```", "")
                 import json
                 st.session_state.extracted_data = json.loads(json_text)
@@ -107,8 +143,7 @@ if st.button("1. Scan Page & Extract Data 🔍"):
             except requests.exceptions.Timeout:
                 st.error("The LFC website took too long to respond.")
             except Exception as e:
-                st.error(f"Failed to automatically pull details: {e}. You can build the data manually below.")
-                # Fallback empty configuration
+                st.error(f"Failed to automatically pull details: {e}.")
                 st.session_state.extracted_data = {
                     "match_name": "", "criteria": "All Members", "reg_open": "", "reg_close": "",
                     "links_sent": "", "ballot_open": "", "ballot_close": "", "ballot_results": "TBA",
@@ -120,7 +155,6 @@ if st.session_state.extracted_data:
     st.divider()
     st.subheader("📝 Verify / Edit Extracted Details")
     
-    # Render editable text fields prefilled with JSON content
     d = st.session_state.extracted_data
     
     col1, col2 = st.columns(2)
@@ -138,7 +172,6 @@ if st.session_state.extracted_data:
         m_date = st.text_input("Match Date & Time", value=d.get("match_date", ""))
 
     if st.button("2. Generate Final Tweet & Ordered Calendar Buttons 🚀", type="primary"):
-        # Format the tweet layout using the edited variables
         sale_label = "Sale (4+ Members)" if crit == "4+ Members" else "Sale"
         
         tweet_output = f"""{m_name} (H) - Sale Details 📢\n
@@ -157,9 +190,9 @@ Match Date • {m_date} 🏟️"""
         st.code(tweet_output, language="text")
 
         st.divider()
-        st.subheader("📅 Google Calendar Links (Strict Sequence Order)")
+        st.subheader("📅 Schedule Calendar Section")
 
-        # Events strictly scheduled in requested sequence pattern
+        # Events structural mapping arrays in exact layout requested
         events = [
             {"label": "1. Registration Open", "name": f"LFC v {m_name} - Registration Opens", "time": r_open, "all_day": False},
             {"label": "2. Registration Closes", "name": f"LFC v {m_name} - Registration Closes", "time": r_close, "all_day": False},
@@ -171,15 +204,34 @@ Match Date • {m_date} 🏟️"""
             {"label": "8. Match Day", "name": f"LFC v {m_name} - Match Date", "time": m_date, "all_day": False}
         ]
 
-        # Display buttons on single rows sequentially
+        # One-click Master URL Generation
+        try:
+            subscribe_url = generate_gcal_subscribe_url(events)
+            st.markdown(
+                f"""
+                <a href="{subscribe_url}" target="_blank" style="text-decoration: none;">
+                    <button style="background-color: #E60000; color: white; font-weight: bold; border: none; padding: 12px 24px; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; width: 100%;">
+                        📅 🔗 Click Here to Add ALL 8 Events directly to Google Calendar
+                    </button>
+                </a>
+                """,
+                unsafe_allow_html=True
+            )
+        except Exception:
+            st.warning("Could not bundle master calendar link.")
+
+        st.caption("Or choose individual web links manually below:")
+
+        # Fallback individual rows format
         for ev in events:
             if ev["time"] and ev["time"] != "TBA" and not ev["time"].startswith("["):
-                gcal_dates = format_gcal_date(ev["time"], is_all_day=ev["all_day"])
+                dt_obj = parse_to_datetime(ev["time"])
+                gcal_dates = format_gcal_date(dt_obj, is_all_day=ev["all_day"])
                 if gcal_dates:
                     encoded_name = urllib.parse.quote(ev["name"])
                     gcal_url = f"https://calendar.google.com/calendar/render?action=TEMPLATE&text={encoded_name}&dates={gcal_dates}"
                     st.markdown(f"🔗 **[{ev['label']}]({gcal_url})** — *{ev['time']}*")
                 else:
-                    st.markdown(f"⚠️ **{ev['label']}** — *Unable to calculate layout string for timestamp: '{ev['time']}'*")
+                    st.markdown(f"⚠️ **{ev['label']}** — *Unable to parse layout pattern format for timestamp: '{ev['time']}'*")
             else:
                 st.markdown(f"⚪ **{ev['label']}** — *Not announced (TBA)*")
