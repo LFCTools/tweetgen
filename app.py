@@ -83,7 +83,7 @@ def datetime_editor(label, dt_str, key):
     return f"{d.strftime('%a %d %b')}, {time_formatted}"
 
 # --- STREAMLIT CONFIG & STATE ---
-st.set_page_config(page_title="LFC Alerts", page_icon="🔴", layout="centered")
+st.set_page_config(page_title="LFC Alerts", layout="centered")
 
 # --- LOAD SECRETS ---
 try:
