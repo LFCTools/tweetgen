@@ -78,7 +78,7 @@ if st.button("1. Scan Page & Extract Data 🔍"):
                 
                 Desired JSON Format:
                 {{
-                  "match_name": "Opponent Name",
+                  "match_name": "Only the opponent team name (e.g., Sunderland)",
                   "criteria": "All Members or 4+ Members",
                   "reg_open": "Day Date, Time",
                   "reg_close": "Day Date, Time",
@@ -153,14 +153,14 @@ Match Date • {m_date} 🏟️"""
 
         # Events structural mapping arrays in exact layout requested
         events = [
-            {"label": "1. Registration Open", "name": f"LFC v {m_name} - Registration Opens", "time": r_open, "all_day": False},
-            {"label": "2. Registration Closes", "name": f"LFC v {m_name} - Registration Closes", "time": r_close, "all_day": False},
-            {"label": "3. Unique Links Sent", "name": f"LFC v {m_name} - Unique Links Sent", "time": l_sent, "all_day": True},
-            {"label": "4. Local Ballot Open", "name": f"LFC v {m_name} - Local Ballot Opens", "time": b_open, "all_day": False},
-            {"label": "5. Local Ballot Closes", "name": f"LFC v {m_name} - Local Ballot Closes", "time": b_close, "all_day": False},
-            {"label": "6. Local Ballot Results", "name": f"LFC v {m_name} - Local Ballot Results", "time": b_res, "all_day": True},
-            {"label": "7. Ticket Sale Opens", "name": f"LFC v {m_name} - Ticket Sale", "time": t_sale, "all_day": False},
-            {"label": "8. Match Day", "name": f"LFC v {m_name} - Match Date", "time": m_date, "all_day": False}
+            {"label": "1. Registration Open", "name": f"{m_name} (H) - Registration Opens", "time": r_open, "all_day": False},
+            {"label": "2. Registration Closes", "name": f"{m_name} (H) - Registration Closes", "time": r_close, "all_day": False},
+            {"label": "3. Unique Links Sent", "name": f"{m_name} (H) - Unique Links Sent", "time": l_sent, "all_day": True},
+            {"label": "4. Local Ballot Open", "name": f"{m_name} (H) - Local Ballot Opens", "time": b_open, "all_day": False},
+            {"label": "5. Local Ballot Closes", "name": f"{m_name} (H) - Local Ballot Closes", "time": b_close, "all_day": False},
+            {"label": "6. Local Ballot Results", "name": f"{m_name} (H) - Local Ballot Results", "time": b_res, "all_day": True},
+            {"label": "7. Ticket Sale Opens", "name": f"{m_name} (H) - Ticket Sale", "time": t_sale, "all_day": False},
+            {"label": "8. Match Day", "name": f"{m_name} (H) - Match Date", "time": m_date, "all_day": False}
         ]
 
         # Generate individual links
