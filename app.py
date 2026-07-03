@@ -190,11 +190,145 @@ Match Date • {pl_m_date} 🏟️"""
 # TAB 2: CUP GAMES
 # ==========================================
 with tab2:
-    st.header("Cup Games Alerts")
-    st.info("The structure here is ready to process Cup Games independently from the Premier League tab!")
-    
-    # Ready to be populated based on your Cup Game rules
+    st.header("🏆 Cup Games Alerts")
     cup_url = st.text_input("Ticket Page URL (Cup):", placeholder="https://www.liverpoolfc.com/tickets/...", key="cup_url")
-    
-    if st.button("1. Scan Page & Extract Data 🔍", key="cup_scan"):
-        st.warning("We need to define the Cup Game extraction rules first!")
+
+    if st.button("1. Scan Page & Extract Cup Data 🔍", key="cup_scan"):
+        if not cup_url or not api_key_input:
+            st.error("Please provide both the URL and your Gemini API Key.")
+        else:
+            with st.spinner("Scraping LFC and parsing Cup details with Gemini..."):
+                try:
+                    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                    response = requests.get(cup_url, headers=headers, timeout=5)
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    for script in soup(["script", "style", "nav", "footer", "header"]):
+                        script.extract()
+                    page_text = " ".join(soup.get_text().split())[:3500] # Slightly larger chunk for cup rules
+
+                    genai.configure(api_key=api_key_input)
+                    model = genai.GenerativeModel('gemini-2.5-flash')
+                    
+                    prompt = f"""
+                    Analyze the following raw text from an LFC Cup match ticket page. Extract the exact names and dates.
+                    Respond ONLY with a valid raw JSON object matching the structure below. 
+                    Use abbreviated days (e.g., Wed) and months (e.g., Nov) and format times like 10:00am or 11:00am.
+                    If any field is missing, make its value "TBA".
+                    For 'sales', create an array of objects for each credit/game tier you find. Ensure 'tier' reflects the requirement (e.g., "5+ Games", "4+ Credit balance").
+                    
+                    Desired JSON Format:
+                    {{
+                      "match_name": "Only the opponent team name",
+                      "sales": [
+                        {{"tier": "5+ Games", "open": "Day Date, Time", "close": "Day Date, Time"}},
+                        {{"tier": "4+ Games", "open": "Day Date, Time", "close": "Day Date, Time"}}
+                      ],
+                      "ballot_open": "Day Date, Time",
+                      "ballot_close": "Day Date, Time",
+                      "ballot_results": "TBA or Day Date",
+                      "acs_start": "Day Date",
+                      "acs_end": "Day Date",
+                      "match_date": "Day Date, Time"
+                    }}
+
+                    Source Text: {page_text}
+                    """
+                    
+                    ai_response = model.generate_content(prompt)
+                    json_text = ai_response.text.strip().replace("```json", "").replace("```", "")
+                    import json
+                    st.session_state.cup_data = json.loads(json_text)
+                    st.success("Cup data extracted! Review and edit the tiers below.")
+                    
+                except requests.exceptions.Timeout:
+                    st.error("The LFC website took too long to respond.")
+                except Exception as e:
+                    st.error(f"Failed to automatically pull details: {e}.")
+                    st.session_state.cup_data = {
+                        "match_name": "", 
+                        "sales": [{"tier": "All Members", "open": "", "close": ""}], 
+                        "ballot_open": "", "ballot_close": "", "ballot_results": "TBA",
+                        "acs_start": "", "acs_end": "", "match_date": ""
+                    }
+
+    # --- STEP 2: EDITING AND FINAL OUTPUT FOR CUP GAMES ---
+    if st.session_state.cup_data:
+        st.divider()
+        st.subheader("📝 Verify / Edit Cup Details")
+        
+        cd = st.session_state.cup_data
+        
+        cup_m_name = st.text_input("Opponent Team Name", value=cd.get("match_name", ""), key="cup_m_name")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            cup_acs_start = st.text_input("ACS Payment Start", value=cd.get("acs_start", ""), key="cup_acs_start")
+            cup_b_open = st.text_input("Local Ballot Opens", value=cd.get("ballot_open", ""), key="cup_b_open")
+            cup_b_res = st.text_input("Local Ballot Results", value=cd.get("ballot_results", "TBA"), key="cup_b_res")
+        with col2:
+            cup_acs_end = st.text_input("ACS Payment End", value=cd.get("acs_end", ""), key="cup_acs_end")
+            cup_b_close = st.text_input("Local Ballot Closes", value=cd.get("ballot_close", ""), key="cup_b_close")
+            cup_m_date = st.text_input("Match Date & Time", value=cd.get("match_date", ""), key="cup_m_date")
+
+        st.markdown("**Sale Tiers**")
+        edited_sales = []
+        for i, sale in enumerate(cd.get("sales", [])):
+            st.markdown(f"*Tier {i+1}*")
+            scol1, scol2, scol3 = st.columns(3)
+            with scol1:
+                t_name = st.text_input(f"Criteria (e.g., 6+ Games)", value=sale.get("tier", ""), key=f"tier_name_{i}")
+            with scol2:
+                t_open = st.text_input(f"Opens", value=sale.get("open", ""), key=f"tier_open_{i}")
+            with scol3:
+                t_close = st.text_input(f"Closes", value=sale.get("close", ""), key=f"tier_close_{i}")
+            edited_sales.append({"tier": t_name, "open": t_open, "close": t_close})
+
+        if st.button("2. Generate Cup Tweet & Calendar Buttons 🚀", type="primary", key="cup_gen"):
+            
+            # Format sales block dynamically
+            sales_formatted_text = ""
+            for s in edited_sales:
+                sales_formatted_text += f"Sale ({s['tier']})\n• Opens: {s['open']}\n• Closes: {s['close']}\n\n"
+
+            tweet_output = f"""{cup_m_name} (H) - Sale Details 📢\n\n{sales_formatted_text}Local Ballot 🗳️
+• Opens: {cup_b_open}
+• Closes: {cup_b_close}
+• Results: {cup_b_res}\n
+ACS Payment Run 💰
+• {cup_acs_start} - {cup_acs_end}\n
+Match Date • {cup_m_date} 🏟️"""
+
+            st.subheader("🐦 Your Formatted Cup Tweet")
+            st.code(tweet_output.strip(), language="text")
+
+            st.divider()
+            st.subheader("📅 Schedule Calendar Section")
+
+            # Core events
+            events = [
+                {"label": "ACS Payment Run", "name": f"{cup_m_name} (H) - ACS Payment Run", "time": f"{cup_acs_start} 09:00am", "all_day": True},
+                {"label": "Local Ballot Open", "name": f"{cup_m_name} (H) - Local Ballot Opens", "time": cup_b_open, "all_day": False},
+                {"label": "Local Ballot Closes", "name": f"{cup_m_name} (H) - Local Ballot Closes", "time": cup_b_close, "all_day": False},
+                {"label": "Local Ballot Results", "name": f"{cup_m_name} (H) - Local Ballot Results", "time": cup_b_res, "all_day": True}
+            ]
+
+            # Inject all dynamic sales tiers into the calendar list
+            for s in edited_sales:
+                events.append({"label": f"Sale Open ({s['tier']})", "name": f"{cup_m_name} (H) - Sale Opens ({s['tier']})", "time": s['open'], "all_day": False})
+                events.append({"label": f"Sale Close ({s['tier']})", "name": f"{cup_m_name} (H) - Sale Closes ({s['tier']})", "time": s['close'], "all_day": False})
+
+            events.append({"label": "Match Day", "name": f"{cup_m_name} (H) - Match Date", "time": cup_m_date, "all_day": False})
+
+            # Render Links
+            for ev in events:
+                if ev["time"] and ev["time"] != "TBA" and not ev["time"].startswith("["):
+                    dt_obj = parse_to_datetime(ev["time"])
+                    gcal_dates = format_gcal_date(dt_obj, is_all_day=ev["all_day"])
+                    if gcal_dates:
+                        encoded_name = urllib.parse.quote(ev["name"])
+                        gcal_url = f"https://calendar.google.com/calendar/render?action=TEMPLATE&text={encoded_name}&dates={gcal_dates}"
+                        st.markdown(f"🔗 **[{ev['label']}]({gcal_url})** — *{ev['time']}*")
+                    else:
+                        st.markdown(f"⚠️ **{ev['label']}** — *Unable to parse layout pattern format for timestamp: '{ev['time']}'*")
+                else:
+                    st.markdown(f"⚪ **{ev['label']}** — *Not announced (TBA)*")
