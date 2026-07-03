@@ -74,18 +74,19 @@ def datetime_editor(dt_str, key):
     return f"{d.strftime('%a %d %b')}, {time_formatted}"
 
 def editable_date_row(label, default_val, key):
-    """Creates a clean text row with a popover Edit button next to it."""
-    col_text, col_btn = st.columns([3, 1])
+    """Creates a compact 3-column row: Label | Date | Edit Button."""
+    col_label, col_val, col_btn = st.columns([2, 2.5, 1])
     
     with col_btn:
-        # st.popover acts like a button but opens a floating menu!
         with st.popover("✏️ Edit", use_container_width=True):
             st.markdown(f"**Edit: {label}**")
             new_val = datetime_editor(default_val, key)
             
-    with col_text:
-        # Display the value that updates dynamically based on the popover above
-        st.markdown(f"**{label}:** {new_val}")
+    with col_label:
+        st.markdown(f"<div style='padding-top: 8px;'><b>{label}</b></div>", unsafe_allow_html=True)
+        
+    with col_val:
+        st.markdown(f"<div style='padding-top: 8px; color: #E60000;'>{new_val}</div>", unsafe_allow_html=True)
         
     return new_val
 
