@@ -85,18 +85,17 @@ def datetime_editor(label, dt_str, key):
 # --- STREAMLIT CONFIG & STATE ---
 st.set_page_config(page_title="LFC Alerts", page_icon="🔴", layout="centered")
 
+# --- LOAD SECRETS ---
+try:
+    api_key = st.secrets["GEMINI_API_KEY"]
+except KeyError:
+    st.error("⚠️ GEMINI_API_KEY is missing from Streamlit Secrets. Please add it to your dashboard to continue.")
+    st.stop()
+
 if "pl_data" not in st.session_state:
     st.session_state.pl_data = None
 if "cup_data" not in st.session_state:
     st.session_state.cup_data = None
-
-# --- SIDEBAR ---
-with st.sidebar:
-    st.image("https://upload.wikimedia.org/wikipedia/en/thumb/0/0c/Liverpool_FC.svg/1200px-Liverpool_FC.svg.png", width=80)
-    st.title("Settings")
-    api_key_input = st.text_input("Gemini API Key:", type="password", help="Required to parse the LFC website text.")
-    st.divider()
-    st.caption("Developed for LFC Ticket Alerts. Generates perfectly formatted tweets and Google Calendar schedule links.")
 
 # --- MAIN HEADER ---
 st.title("🔴 LFC Ticket Alerts")
@@ -113,8 +112,8 @@ with tab1:
     with st.container(border=True):
         pl_url = st.text_input("🔗 Ticket Page URL (PL):", placeholder="https://www.liverpoolfc.com/tickets/...", key="pl_url")
         if st.button("Scan PL Page 🔍", use_container_width=True, key="pl_scan"):
-            if not pl_url or not api_key_input:
-                st.error("Please provide both the URL and your Gemini API Key in the sidebar.")
+            if not pl_url:
+                st.error("Please provide the URL.")
             else:
                 with st.spinner("Analyzing ticketing page..."):
                     try:
@@ -125,7 +124,7 @@ with tab1:
                             script.extract()
                         page_text = " ".join(soup.get_text().split())[:3000]
 
-                        genai.configure(api_key=api_key_input)
+                        genai.configure(api_key=api_key)
                         model = genai.GenerativeModel('gemini-2.5-flash')
                         
                         prompt = f"""
@@ -246,8 +245,8 @@ with tab2:
         cup_url = st.text_input("🔗 Ticket Page URL (Cup):", placeholder="https://www.liverpoolfc.com/tickets/...", key="cup_url")
 
         if st.button("Scan Cup Page 🔍", use_container_width=True, key="cup_scan"):
-            if not cup_url or not api_key_input:
-                st.error("Please provide both the URL and your Gemini API Key in the sidebar.")
+            if not cup_url:
+                st.error("Please provide the URL.")
             else:
                 with st.spinner("Analyzing Cup ticketing page..."):
                     try:
@@ -258,7 +257,7 @@ with tab2:
                             script.extract()
                         page_text = " ".join(soup.get_text().split())[:3500] 
 
-                        genai.configure(api_key=api_key_input)
+                        genai.configure(api_key=api_key)
                         model = genai.GenerativeModel('gemini-2.5-flash')
                         
                         prompt = f"""
