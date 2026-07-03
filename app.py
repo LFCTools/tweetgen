@@ -44,135 +44,157 @@ def format_gcal_date(dt, is_all_day=False):
         end_iso = (dt + timedelta(hours=1)).strftime("%Y%m%dT%H%M%S")
         return f"{start_iso}/{end_iso}"
 
-# --- STREAMLIT CONFIG ---
-st.set_page_config(page_title="LFC Tweet Generator", page_icon="⚽")
+# --- STREAMLIT CONFIG & STATE ---
+st.set_page_config(page_title="LFC Tweet Generator", page_icon="⚽", layout="wide")
 st.title("⚽ LFC Ticket Tweet & Calendar Generator")
 
-if "extracted_data" not in st.session_state:
-    st.session_state.extracted_data = None
-
-url_input = st.text_input("Ticket Page URL:", placeholder="https://www.liverpoolfc.com/tickets/...")
 api_key_input = st.text_input("Enter Gemini API Key (Keep it private):", type="password")
 
-if st.button("1. Scan Page & Extract Data 🔍"):
-    if not url_input or not api_key_input:
-        st.error("Please provide both the URL and your Gemini API Key.")
-    else:
-        with st.spinner("Scraping LFC and parsing with Gemini..."):
-            try:
-                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-                response = requests.get(url_input, headers=headers, timeout=5)
-                soup = BeautifulSoup(response.text, 'html.parser')
-                for script in soup(["script", "style", "nav", "footer", "header"]):
-                    script.extract()
-                page_text = " ".join(soup.get_text().split())[:3000]
+if "pl_data" not in st.session_state:
+    st.session_state.pl_data = None
+if "cup_data" not in st.session_state:
+    st.session_state.cup_data = None
 
-                genai.configure(api_key=api_key_input)
-                model = genai.GenerativeModel('gemini-2.5-flash')
-                
-                prompt = f"""
-                Analyze the following raw text from an LFC ticket page. Extract the exact names and dates.
-                Respond ONLY with a valid raw JSON object matching these exact keys. 
-                Use abbreviated days (e.g., Wed) and months (e.g., Nov) and format times like 10:00am or 11:00am.
-                If any field is missing or not declared yet, make its value "TBA".
-                
-                Desired JSON Format:
-                {{
-                  "match_name": "Only the opponent team name (e.g., Sunderland)",
-                  "criteria": "All Members or 4+ Members",
-                  "reg_open": "Day Date, Time",
-                  "reg_close": "Day Date, Time",
-                  "links_sent": "Day Date",
-                  "ballot_open": "Day Date, Time",
-                  "ballot_close": "Day Date, Time",
-                  "ballot_results": "TBA or Day Date",
-                  "ticket_sale": "Day Date, Time",
-                  "match_date": "Day Date, Time"
-                }}
+# --- TABS ---
+tab1, tab2 = st.tabs(["🏆 Premier League (Home)", "🏅 Cup Games"])
 
-                Source Text: {page_text}
-                """
-                
-                ai_response = model.generate_content(prompt)
-                json_text = ai_response.text.strip().replace("```json", "").replace("```", "")
-                import json
-                st.session_state.extracted_data = json.loads(json_text)
-                st.success("Data extracted! Review and edit it below.")
-                
-            except requests.exceptions.Timeout:
-                st.error("The LFC website took too long to respond.")
-            except Exception as e:
-                st.error(f"Failed to automatically pull details: {e}.")
-                st.session_state.extracted_data = {
-                    "match_name": "", "criteria": "All Members", "reg_open": "", "reg_close": "",
-                    "links_sent": "", "ballot_open": "", "ballot_close": "", "ballot_results": "TBA",
-                    "ticket_sale": "", "match_date": ""
-                }
+# ==========================================
+# TAB 1: PREMIER LEAGUE HOME GAMES
+# ==========================================
+with tab1:
+    st.header("Premier League (Home) Alerts")
+    pl_url = st.text_input("Ticket Page URL (PL):", placeholder="https://www.liverpoolfc.com/tickets/...", key="pl_url")
 
-# --- STEP 2: EDITING AND FINAL OUTPUT GENERATION ---
-if st.session_state.extracted_data:
-    st.divider()
-    st.subheader("📝 Verify / Edit Extracted Details")
-    
-    d = st.session_state.extracted_data
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        m_name = st.text_input("Opponent Team Name", value=d.get("match_name", ""))
-        crit = st.selectbox("Registration/Sale Criteria", ["All Members", "4+ Members"], index=0 if d.get("criteria") == "All Members" else 1)
-        r_open = st.text_input("Registration Opens", value=d.get("reg_open", ""))
-        r_close = st.text_input("Registration Closes", value=d.get("reg_close", ""))
-        l_sent = st.text_input("Links Sent", value=d.get("links_sent", ""))
-    with col2:
-        b_open = st.text_input("Local Ballot Opens", value=d.get("ballot_open", ""))
-        b_close = st.text_input("Local Ballot Closes", value=d.get("ballot_close", ""))
-        b_res = st.text_input("Local Ballot Results", value=d.get("ballot_results", "TBA"))
-        t_sale = st.text_input("Ticket Sale Opens", value=d.get("ticket_sale", ""))
-        m_date = st.text_input("Match Date & Time", value=d.get("match_date", ""))
+    if st.button("1. Scan Page & Extract Data 🔍", key="pl_scan"):
+        if not pl_url or not api_key_input:
+            st.error("Please provide both the URL and your Gemini API Key.")
+        else:
+            with st.spinner("Scraping LFC and parsing with Gemini..."):
+                try:
+                    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                    response = requests.get(pl_url, headers=headers, timeout=5)
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    for script in soup(["script", "style", "nav", "footer", "header"]):
+                        script.extract()
+                    page_text = " ".join(soup.get_text().split())[:3000]
 
-    if st.button("2. Generate Final Tweet & Ordered Calendar Buttons 🚀", type="primary"):
-        sale_label = "Sale (4+ Members)" if crit == "4+ Members" else "Sale"
-        
-        tweet_output = f"""{m_name} (H) - Sale Details 📢\n
-Registration ({crit}) 📝
-• Opens: {r_open}
-• Closes: {r_close}
-• Links sent: {l_sent}\n
-{sale_label} • {t_sale} 🎟️\n
-Local & YA Ballot 🗳️
-• Opens: {b_open}
-• Closes: {b_close}
-• Results: {b_res}\n
-Match Date • {m_date} 🏟️"""
+                    genai.configure(api_key=api_key_input)
+                    model = genai.GenerativeModel('gemini-2.5-flash')
+                    
+                    prompt = f"""
+                    Analyze the following raw text from an LFC ticket page. Extract the exact names and dates.
+                    Respond ONLY with a valid raw JSON object matching these exact keys. 
+                    Use abbreviated days (e.g., Wed) and months (e.g., Nov) and format times like 10:00am or 11:00am.
+                    If any field is missing or not declared yet, make its value "TBA".
+                    
+                    Desired JSON Format:
+                    {{
+                      "match_name": "Only the opponent team name (e.g., Sunderland)",
+                      "criteria": "All Members or 4+ Members",
+                      "reg_open": "Day Date, Time",
+                      "reg_close": "Day Date, Time",
+                      "links_sent": "Day Date",
+                      "ballot_open": "Day Date, Time",
+                      "ballot_close": "Day Date, Time",
+                      "ballot_results": "TBA or Day Date",
+                      "ticket_sale": "Day Date, Time",
+                      "match_date": "Day Date, Time"
+                    }}
 
-        st.subheader("🐦 Your Formatted Tweet")
-        st.code(tweet_output, language="text")
+                    Source Text: {page_text}
+                    """
+                    
+                    ai_response = model.generate_content(prompt)
+                    json_text = ai_response.text.strip().replace("```json", "").replace("```", "")
+                    import json
+                    st.session_state.pl_data = json.loads(json_text)
+                    st.success("Data extracted! Review and edit it below.")
+                    
+                except requests.exceptions.Timeout:
+                    st.error("The LFC website took too long to respond.")
+                except Exception as e:
+                    st.error(f"Failed to automatically pull details: {e}.")
+                    st.session_state.pl_data = {
+                        "match_name": "", "criteria": "All Members", "reg_open": "", "reg_close": "",
+                        "links_sent": "", "ballot_open": "", "ballot_close": "", "ballot_results": "TBA",
+                        "ticket_sale": "", "match_date": ""
+                    }
 
+    if st.session_state.pl_data:
         st.divider()
-        st.subheader("📅 Schedule Calendar Section")
+        st.subheader("📝 Verify / Edit Extracted Details")
+        
+        d = st.session_state.pl_data
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            pl_m_name = st.text_input("Opponent Team Name", value=d.get("match_name", ""), key="pl_m_name")
+            pl_crit = st.selectbox("Registration/Sale Criteria", ["All Members", "4+ Members"], index=0 if d.get("criteria") == "All Members" else 1, key="pl_crit")
+            pl_r_open = st.text_input("Registration Opens", value=d.get("reg_open", ""), key="pl_r_open")
+            pl_r_close = st.text_input("Registration Closes", value=d.get("reg_close", ""), key="pl_r_close")
+            pl_l_sent = st.text_input("Links Sent", value=d.get("links_sent", ""), key="pl_l_sent")
+        with col2:
+            pl_b_open = st.text_input("Local Ballot Opens", value=d.get("ballot_open", ""), key="pl_b_open")
+            pl_b_close = st.text_input("Local Ballot Closes", value=d.get("ballot_close", ""), key="pl_b_close")
+            pl_b_res = st.text_input("Local Ballot Results", value=d.get("ballot_results", "TBA"), key="pl_b_res")
+            pl_t_sale = st.text_input("Ticket Sale Opens", value=d.get("ticket_sale", ""), key="pl_t_sale")
+            pl_m_date = st.text_input("Match Date & Time", value=d.get("match_date", ""), key="pl_m_date")
 
-        # Events structural mapping arrays in exact layout requested
-        events = [
-            {"label": "1. Registration Open", "name": f"{m_name} (H) - Registration Opens", "time": r_open, "all_day": False},
-            {"label": "2. Registration Closes", "name": f"{m_name} (H) - Registration Closes", "time": r_close, "all_day": False},
-            {"label": "3. Unique Links Sent", "name": f"{m_name} (H) - Unique Links Sent", "time": l_sent, "all_day": True},
-            {"label": "4. Local Ballot Open", "name": f"{m_name} (H) - Local Ballot Opens", "time": b_open, "all_day": False},
-            {"label": "5. Local Ballot Closes", "name": f"{m_name} (H) - Local Ballot Closes", "time": b_close, "all_day": False},
-            {"label": "6. Local Ballot Results", "name": f"{m_name} (H) - Local Ballot Results", "time": b_res, "all_day": True},
-            {"label": "7. Ticket Sale Opens", "name": f"{m_name} (H) - Ticket Sale", "time": t_sale, "all_day": False},
-            {"label": "8. Match Day", "name": f"{m_name} (H) - Match Date", "time": m_date, "all_day": False}
-        ]
+        if st.button("2. Generate PL Tweet & Calendar Buttons 🚀", type="primary", key="pl_gen"):
+            sale_label = "Sale (4+ Members)" if pl_crit == "4+ Members" else "Sale"
+            
+            tweet_output = f"""{pl_m_name} (H) - Sale Details 📢\n
+Registration ({pl_crit}) 📝
+• Opens: {pl_r_open}
+• Closes: {pl_r_close}
+• Links sent: {pl_l_sent}\n
+{sale_label} • {pl_t_sale} 🎟️\n
+Local & YA Ballot 🗳️
+• Opens: {pl_b_open}
+• Closes: {pl_b_close}
+• Results: {pl_b_res}\n
+Match Date • {pl_m_date} 🏟️"""
 
-        # Generate individual links
-        for ev in events:
-            if ev["time"] and ev["time"] != "TBA" and not ev["time"].startswith("["):
-                dt_obj = parse_to_datetime(ev["time"])
-                gcal_dates = format_gcal_date(dt_obj, is_all_day=ev["all_day"])
-                if gcal_dates:
-                    encoded_name = urllib.parse.quote(ev["name"])
-                    gcal_url = f"https://calendar.google.com/calendar/render?action=TEMPLATE&text={encoded_name}&dates={gcal_dates}"
-                    st.markdown(f"🔗 **[{ev['label']}]({gcal_url})** — *{ev['time']}*")
+            st.subheader("🐦 Your Formatted Tweet")
+            st.code(tweet_output, language="text")
+
+            st.divider()
+            st.subheader("📅 Schedule Calendar Section")
+
+            events = [
+                {"label": "1. Registration Open", "name": f"{pl_m_name} (H) - Registration Opens", "time": pl_r_open, "all_day": False},
+                {"label": "2. Registration Closes", "name": f"{pl_m_name} (H) - Registration Closes", "time": pl_r_close, "all_day": False},
+                {"label": "3. Unique Links Sent", "name": f"{pl_m_name} (H) - Unique Links Sent", "time": pl_l_sent, "all_day": True},
+                {"label": "4. Local Ballot Open", "name": f"{pl_m_name} (H) - Local Ballot Opens", "time": pl_b_open, "all_day": False},
+                {"label": "5. Local Ballot Closes", "name": f"{pl_m_name} (H) - Local Ballot Closes", "time": pl_b_close, "all_day": False},
+                {"label": "6. Local Ballot Results", "name": f"{pl_m_name} (H) - Local Ballot Results", "time": pl_b_res, "all_day": True},
+                {"label": "7. Ticket Sale Opens", "name": f"{pl_m_name} (H) - Ticket Sale", "time": pl_t_sale, "all_day": False},
+                {"label": "8. Match Day", "name": f"{pl_m_name} (H) - Match Date", "time": pl_m_date, "all_day": False}
+            ]
+
+            for ev in events:
+                if ev["time"] and ev["time"] != "TBA" and not ev["time"].startswith("["):
+                    dt_obj = parse_to_datetime(ev["time"])
+                    gcal_dates = format_gcal_date(dt_obj, is_all_day=ev["all_day"])
+                    if gcal_dates:
+                        encoded_name = urllib.parse.quote(ev["name"])
+                        gcal_url = f"https://calendar.google.com/calendar/render?action=TEMPLATE&text={encoded_name}&dates={gcal_dates}"
+                        st.markdown(f"🔗 **[{ev['label']}]({gcal_url})** — *{ev['time']}*")
+                    else:
+                        st.markdown(f"⚠️ **{ev['label']}** — *Unable to parse layout pattern format for timestamp: '{ev['time']}'*")
                 else:
-                    st.markdown(f"⚠️ **{ev['label']}** — *Unable to parse layout pattern format for timestamp: '{ev['time']}'*")
-            else:
-                st.markdown(f"⚪ **{ev['label']}** — *Not announced (TBA)*")
+                    st.markdown(f"⚪ **{ev['label']}** — *Not announced (TBA)*")
+
+
+# ==========================================
+# TAB 2: CUP GAMES
+# ==========================================
+with tab2:
+    st.header("Cup Games Alerts")
+    st.info("The structure here is ready to process Cup Games independently from the Premier League tab!")
+    
+    # Ready to be populated based on your Cup Game rules
+    cup_url = st.text_input("Ticket Page URL (Cup):", placeholder="https://www.liverpoolfc.com/tickets/...", key="cup_url")
+    
+    if st.button("1. Scan Page & Extract Data 🔍", key="cup_scan"):
+        st.warning("We need to define the Cup Game extraction rules first!")
