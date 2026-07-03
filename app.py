@@ -48,47 +48,67 @@ def format_gcal_date(dt, is_all_day=False):
         end_iso = (dt + timedelta(hours=1)).strftime("%Y%m%dT%H%M%S")
         return f"{start_iso}/{end_iso}"
 
-# --- CUSTOM UI WIDGET (POPOVER EDITOR) ---
-def datetime_editor(dt_str, key):
-    """The internal widget that renders inside the popover."""
-    dt_obj = parse_to_datetime(dt_str)
-    is_tba_init = not bool(dt_obj) or dt_str == "TBA"
-    
-    default_date = dt_obj.date() if dt_obj else datetime.today().date()
-    default_time = dt_obj.time() if dt_obj else datetime.strptime("10:00am", "%I:%M%p").time()
-    
-    is_allday_init = False
-    if dt_str and dt_str != "TBA" and not any(m in dt_str.lower() for m in ['am','pm',':']):
-        is_allday_init = True
-        
-    is_tba = st.checkbox("TBA", value=is_tba_init, key=f"{key}_tba")
-    all_day = st.checkbox("All Day", value=is_allday_init, key=f"{key}_allday", disabled=is_tba)
-    
-    d = st.date_input("Date", value=default_date, key=f"{key}_date", disabled=is_tba)
-    t = st.time_input("Time", value=default_time, key=f"{key}_time", disabled=is_tba or all_day)
-    
-    if is_tba: return "TBA"
-    if all_day: return d.strftime("%a %d %b")
-    
-    time_formatted = t.strftime("%I:%M%p").lstrip("0").lower()
-    return f"{d.strftime('%a %d %b')}, {time_formatted}"
-
+# --- COMPACT UI WIDGET (INLINE EXPANDER) ---
 def editable_date_row(label, default_val, key):
-    """Creates a compact 3-column row: Label | Date | Edit Button."""
-    col_label, col_val, col_btn = st.columns([2, 2.5, 1])
+    """Creates a single line row that expands downwards when Edit is clicked."""
     
-    with col_btn:
-        with st.popover("✏️ Edit", use_container_width=True):
-            st.markdown(f"**Edit: {label}**")
-            new_val = datetime_editor(default_val, key)
+    # Check if this is a new scan to reset the defaults
+    if f"{key}_default" not in st.session_state or st.session_state[f"{key}_default"] != default_val:
+        st.session_state[f"{key}_default"] = default_val
+        dt_obj = parse_to_datetime(default_val)
+        
+        st.session_state[f"{key}_tba"] = not bool(dt_obj) or default_val == "TBA"
+        st.session_state[f"{key}_allday"] = bool(default_val and default_val != "TBA" and not any(m in default_val.lower() for m in ['am','pm',':']))
+        st.session_state[f"{key}_date"] = dt_obj.date() if dt_obj else datetime.today().date()
+        st.session_state[f"{key}_time"] = dt_obj.time() if dt_obj else datetime.strptime("10:00am", "%I:%M%p").time()
+
+    # Pull current active values
+    is_tba = st.session_state[f"{key}_tba"]
+    all_day = st.session_state[f"{key}_allday"]
+    d = st.session_state[f"{key}_date"]
+    t = st.session_state[f"{key}_time"]
+
+    # Format the display string dynamically
+    if is_tba:
+        display_val = "TBA"
+    elif all_day:
+        display_val = d.strftime("%a %d %b")
+    else:
+        time_formatted = t.strftime("%I:%M%p").lstrip("0").lower()
+        display_val = f"{d.strftime('%a %d %b')}, {time_formatted}"
+
+    # Draw the single line
+    col1, col2, col3 = st.columns([2, 2.5, 1])
+    with col1:
+        st.markdown(f"<div style='padding-top: 8px; font-weight: 500;'>{label}</div>", unsafe_allow_html=True)
+    with col2:
+        st.markdown(f"<div style='padding-top: 8px; color: #E60000;'>{display_val}</div>", unsafe_allow_html=True)
+    with col3:
+        edit_state_key = f"show_edit_{key}"
+        if edit_state_key not in st.session_state:
+            st.session_state[edit_state_key] = False
             
-    with col_label:
-        st.markdown(f"<div style='padding-top: 8px;'><b>{label}</b></div>", unsafe_allow_html=True)
-        
-    with col_val:
-        st.markdown(f"<div style='padding-top: 8px; color: #E60000;'>{new_val}</div>", unsafe_allow_html=True)
-        
-    return new_val
+        if st.button("❌ Close" if st.session_state[edit_state_key] else "✏️ Edit", key=f"btn_{key}", use_container_width=True):
+            st.session_state[edit_state_key] = not st.session_state[edit_state_key]
+            st.rerun()
+
+    # Draw the drop-down edit box if toggled open
+    if st.session_state[edit_state_key]:
+        with st.container(border=True):
+            c1, c2, c3, c4 = st.columns([2, 1.5, 1, 1])
+            with c4:
+                st.write("")
+                st.checkbox("TBA", key=f"{key}_tba")
+            with c3:
+                st.write("")
+                st.checkbox("All Day", key=f"{key}_allday", disabled=st.session_state[f"{key}_tba"])
+            with c1:
+                st.date_input("Date", key=f"{key}_date", label_visibility="collapsed", disabled=st.session_state[f"{key}_tba"])
+            with c2:
+                st.time_input("Time", key=f"{key}_time", label_visibility="collapsed", disabled=st.session_state[f"{key}_tba"] or st.session_state[f"{key}_allday"])
+    
+    return display_val
+
 
 # --- STREAMLIT CONFIG & STATE ---
 st.set_page_config(page_title="LFC Alerts", page_icon="🔴", layout="centered")
@@ -312,11 +332,12 @@ with tab2:
             st.markdown("#### 🎟️ Tiered Sales")
             edited_sales = []
             for i, sale in enumerate(cd.get("sales", [])):
-                with st.expander(f"Sale Tier {i+1} ({sale.get('tier', 'Unknown')})", expanded=True):
-                    t_name = st.text_input(f"Criteria", value=sale.get("tier", ""), key=f"tier_name_{i}")
-                    t_open = editable_date_row("Opens", sale.get("open", ""), f"tier_open_{i}")
-                    t_close = editable_date_row("Closes", sale.get("close", ""), f"tier_close_{i}")
-                    edited_sales.append({"tier": t_name, "open": t_open, "close": t_close})
+                st.markdown(f"**Tier {i+1}**")
+                t_name = st.text_input(f"Criteria", value=sale.get("tier", ""), key=f"tier_name_{i}")
+                t_open = editable_date_row("Opens", sale.get("open", ""), f"tier_open_{i}")
+                t_close = editable_date_row("Closes", sale.get("close", ""), f"tier_close_{i}")
+                st.divider()
+                edited_sales.append({"tier": t_name, "open": t_open, "close": t_close})
 
         with st.container(border=True):
             st.markdown("#### 🗳️ Local Ballot")
