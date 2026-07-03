@@ -48,9 +48,9 @@ def format_gcal_date(dt, is_all_day=False):
         end_iso = (dt + timedelta(hours=1)).strftime("%Y%m%dT%H%M%S")
         return f"{start_iso}/{end_iso}"
 
-# --- COMPACT UI WIDGET (INLINE EXPANDER) ---
+# --- MOBILE-OPTIMIZED UI WIDGET ---
 def editable_date_row(label, default_val, key):
-    """Creates a single line row that expands downwards when Edit is clicked."""
+    """Creates a single-line toggle that drops down editing tools when active."""
     
     # Check if this is a new scan to reset the defaults
     if f"{key}_default" not in st.session_state or st.session_state[f"{key}_default"] != default_val:
@@ -77,36 +77,21 @@ def editable_date_row(label, default_val, key):
         time_formatted = t.strftime("%I:%M%p").lstrip("0").lower()
         display_val = f"{d.strftime('%a %d %b')}, {time_formatted}"
 
-    # Draw the single line
-    col1, col2, col3 = st.columns([2, 2.5, 1])
-    with col1:
-        st.markdown(f"<div style='padding-top: 8px; font-weight: 500;'>{label}</div>", unsafe_allow_html=True)
-    with col2:
-        st.markdown(f"<div style='padding-top: 8px; color: #E60000;'>{display_val}</div>", unsafe_allow_html=True)
-    with col3:
-        edit_state_key = f"show_edit_{key}"
-        if edit_state_key not in st.session_state:
-            st.session_state[edit_state_key] = False
-            
-        if st.button("❌ Close" if st.session_state[edit_state_key] else "✏️ Edit", key=f"btn_{key}", use_container_width=True):
-            st.session_state[edit_state_key] = not st.session_state[edit_state_key]
-            st.rerun()
-
-    # Draw the drop-down edit box if toggled open
-    if st.session_state[edit_state_key]:
-        with st.container(border=True):
-            c1, c2, c3, c4 = st.columns([2, 1.5, 1, 1])
-            with c4:
-                st.write("")
-                st.checkbox("TBA", key=f"{key}_tba")
-            with c3:
-                st.write("")
-                st.checkbox("All Day", key=f"{key}_allday", disabled=st.session_state[f"{key}_tba"])
-            with c1:
-                st.date_input("Date", key=f"{key}_date", label_visibility="collapsed", disabled=st.session_state[f"{key}_tba"])
-            with c2:
-                st.time_input("Time", key=f"{key}_time", label_visibility="collapsed", disabled=st.session_state[f"{key}_tba"] or st.session_state[f"{key}_allday"])
+    # A toggle switch is a single native element, so it will never break into separate lines on mobile
+    edit_mode = st.toggle(f"✏️ **{label}** : {display_val}", key=f"toggle_{key}")
     
+    # Show edit panel only if toggled on
+    if edit_mode:
+        with st.container(border=True):
+            # 2 columns inside the edit box stacks perfectly on mobile without clutter
+            c1, c2 = st.columns(2)
+            with c1:
+                st.date_input("Date", key=f"{key}_date", disabled=st.session_state[f"{key}_tba"])
+                st.checkbox("TBA", key=f"{key}_tba")
+            with c2:
+                st.time_input("Time", key=f"{key}_time", disabled=st.session_state[f"{key}_tba"] or st.session_state[f"{key}_allday"])
+                st.checkbox("All Day", key=f"{key}_allday", disabled=st.session_state[f"{key}_tba"])
+                
     return display_val
 
 
@@ -332,12 +317,12 @@ with tab2:
             st.markdown("#### 🎟️ Tiered Sales")
             edited_sales = []
             for i, sale in enumerate(cd.get("sales", [])):
-                st.markdown(f"**Tier {i+1}**")
-                t_name = st.text_input(f"Criteria", value=sale.get("tier", ""), key=f"tier_name_{i}")
-                t_open = editable_date_row("Opens", sale.get("open", ""), f"tier_open_{i}")
-                t_close = editable_date_row("Closes", sale.get("close", ""), f"tier_close_{i}")
-                st.divider()
-                edited_sales.append({"tier": t_name, "open": t_open, "close": t_close})
+                with st.expander(f"Sale Tier {i+1} ({sale.get('tier', 'Unknown')})", expanded=True):
+                    t_name = st.text_input(f"Criteria", value=sale.get("tier", ""), key=f"tier_name_{i}")
+                    st.write("")
+                    t_open = editable_date_row("Opens", sale.get("open", ""), f"tier_open_{i}")
+                    t_close = editable_date_row("Closes", sale.get("close", ""), f"tier_close_{i}")
+                    edited_sales.append({"tier": t_name, "open": t_open, "close": t_close})
 
         with st.container(border=True):
             st.markdown("#### 🗳️ Local Ballot")
