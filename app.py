@@ -48,8 +48,9 @@ def format_gcal_date(dt, is_all_day=False):
         end_iso = (dt + timedelta(hours=1)).strftime("%Y%m%dT%H%M%S")
         return f"{start_iso}/{end_iso}"
 
-# --- CUSTOM UI WIDGET ---
-def datetime_editor(label, dt_str, key):
+# --- CUSTOM UI WIDGET (POPOVER EDITOR) ---
+def datetime_editor(dt_str, key):
+    """The internal widget that renders inside the popover."""
     dt_obj = parse_to_datetime(dt_str)
     is_tba_init = not bool(dt_obj) or dt_str == "TBA"
     
@@ -60,21 +61,11 @@ def datetime_editor(label, dt_str, key):
     if dt_str and dt_str != "TBA" and not any(m in dt_str.lower() for m in ['am','pm',':']):
         is_allday_init = True
         
-    st.markdown(f"**{label}**")
-    col1, col2, col3, col4 = st.columns([2, 1.5, 1, 1])
+    is_tba = st.checkbox("TBA", value=is_tba_init, key=f"{key}_tba")
+    all_day = st.checkbox("All Day", value=is_allday_init, key=f"{key}_allday", disabled=is_tba)
     
-    with col4:
-        st.write("") # vertical alignment
-        is_tba = st.checkbox("TBA", value=is_tba_init, key=f"{key}_tba")
-    with col3:
-        st.write("") # vertical alignment
-        all_day = st.checkbox("All Day", value=is_allday_init, key=f"{key}_allday", disabled=is_tba)
-    with col1:
-        d = st.date_input("Date", value=default_date, key=f"{key}_date", label_visibility="collapsed", disabled=is_tba)
-    with col2:
-        t = st.time_input("Time", value=default_time, key=f"{key}_time", label_visibility="collapsed", disabled=is_tba or all_day)
-        
-    st.write("") # Spacing after each row
+    d = st.date_input("Date", value=default_date, key=f"{key}_date", disabled=is_tba)
+    t = st.time_input("Time", value=default_time, key=f"{key}_time", disabled=is_tba or all_day)
     
     if is_tba: return "TBA"
     if all_day: return d.strftime("%a %d %b")
@@ -82,8 +73,24 @@ def datetime_editor(label, dt_str, key):
     time_formatted = t.strftime("%I:%M%p").lstrip("0").lower()
     return f"{d.strftime('%a %d %b')}, {time_formatted}"
 
+def editable_date_row(label, default_val, key):
+    """Creates a clean text row with a popover Edit button next to it."""
+    col_text, col_btn = st.columns([3, 1])
+    
+    with col_btn:
+        # st.popover acts like a button but opens a floating menu!
+        with st.popover("✏️ Edit", use_container_width=True):
+            st.markdown(f"**Edit: {label}**")
+            new_val = datetime_editor(default_val, key)
+            
+    with col_text:
+        # Display the value that updates dynamically based on the popover above
+        st.markdown(f"**{label}:** {new_val}")
+        
+    return new_val
+
 # --- STREAMLIT CONFIG & STATE ---
-st.set_page_config(page_title="LFC Alerts", layout="centered")
+st.set_page_config(page_title="LFC Alerts", page_icon="🔴", layout="centered")
 
 # --- LOAD SECRETS ---
 try:
@@ -171,20 +178,20 @@ with tab1:
 
         with st.container(border=True):
             st.markdown("#### 📝 Registration & Sale")
-            pl_r_open = datetime_editor("Registration Opens", d.get("reg_open", ""), "pl_r_open")
-            pl_r_close = datetime_editor("Registration Closes", d.get("reg_close", ""), "pl_r_close")
-            pl_l_sent = datetime_editor("Links Sent", d.get("links_sent", ""), "pl_l_sent")
-            pl_t_sale = datetime_editor("Ticket Sale Opens", d.get("ticket_sale", ""), "pl_t_sale")
+            pl_r_open = editable_date_row("Registration Opens", d.get("reg_open", ""), "pl_r_open")
+            pl_r_close = editable_date_row("Registration Closes", d.get("reg_close", ""), "pl_r_close")
+            pl_l_sent = editable_date_row("Links Sent", d.get("links_sent", ""), "pl_l_sent")
+            pl_t_sale = editable_date_row("Ticket Sale Opens", d.get("ticket_sale", ""), "pl_t_sale")
 
         with st.container(border=True):
             st.markdown("#### 🗳️ Local Ballot")
-            pl_b_open = datetime_editor("Local Ballot Opens", d.get("ballot_open", ""), "pl_b_open")
-            pl_b_close = datetime_editor("Local Ballot Closes", d.get("ballot_close", ""), "pl_b_close")
-            pl_b_res = datetime_editor("Local Ballot Results", d.get("ballot_results", "TBA"), "pl_b_res")
+            pl_b_open = editable_date_row("Local Ballot Opens", d.get("ballot_open", ""), "pl_b_open")
+            pl_b_close = editable_date_row("Local Ballot Closes", d.get("ballot_close", ""), "pl_b_close")
+            pl_b_res = editable_date_row("Local Ballot Results", d.get("ballot_results", "TBA"), "pl_b_res")
 
         with st.container(border=True):
             st.markdown("#### 🏟️ Match Details")
-            pl_m_date = datetime_editor("Match Date & Time", d.get("match_date", ""), "pl_m_date")
+            pl_m_date = editable_date_row("Match Date & Time", d.get("match_date", ""), "pl_m_date")
 
         st.write("")
         if st.button("Generate PL Alerts 🚀", type="primary", use_container_width=True, key="pl_gen"):
@@ -306,22 +313,21 @@ with tab2:
             for i, sale in enumerate(cd.get("sales", [])):
                 with st.expander(f"Sale Tier {i+1} ({sale.get('tier', 'Unknown')})", expanded=True):
                     t_name = st.text_input(f"Criteria", value=sale.get("tier", ""), key=f"tier_name_{i}")
-                    st.write("")
-                    t_open = datetime_editor("Opens", sale.get("open", ""), f"tier_open_{i}")
-                    t_close = datetime_editor("Closes", sale.get("close", ""), f"tier_close_{i}")
+                    t_open = editable_date_row("Opens", sale.get("open", ""), f"tier_open_{i}")
+                    t_close = editable_date_row("Closes", sale.get("close", ""), f"tier_close_{i}")
                     edited_sales.append({"tier": t_name, "open": t_open, "close": t_close})
 
         with st.container(border=True):
             st.markdown("#### 🗳️ Local Ballot")
-            cup_b_open = datetime_editor("Local Ballot Opens", cd.get("ballot_open", ""), "cup_b_open")
-            cup_b_close = datetime_editor("Local Ballot Closes", cd.get("ballot_close", ""), "cup_b_close")
-            cup_b_res = datetime_editor("Local Ballot Results", cd.get("ballot_results", "TBA"), "cup_b_res")
+            cup_b_open = editable_date_row("Local Ballot Opens", cd.get("ballot_open", ""), "cup_b_open")
+            cup_b_close = editable_date_row("Local Ballot Closes", cd.get("ballot_close", ""), "cup_b_close")
+            cup_b_res = editable_date_row("Local Ballot Results", cd.get("ballot_results", "TBA"), "cup_b_res")
 
         with st.container(border=True):
             st.markdown("#### 💰 Auto Cup Scheme & Match Details")
-            cup_acs_start = datetime_editor("ACS Payment Start", cd.get("acs_start", ""), "cup_acs_start")
-            cup_acs_end = datetime_editor("ACS Payment End", cd.get("acs_end", ""), "cup_acs_end")
-            cup_m_date = datetime_editor("Match Date & Time", cd.get("match_date", ""), "cup_m_date")
+            cup_acs_start = editable_date_row("ACS Payment Start", cd.get("acs_start", ""), "cup_acs_start")
+            cup_acs_end = editable_date_row("ACS Payment End", cd.get("acs_end", ""), "cup_acs_end")
+            cup_m_date = editable_date_row("Match Date & Time", cd.get("match_date", ""), "cup_m_date")
 
         st.write("")
         if st.button("Generate Cup Alerts 🚀", type="primary", use_container_width=True, key="cup_gen"):
