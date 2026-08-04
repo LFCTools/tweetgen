@@ -45,7 +45,8 @@ def format_gcal_date(dt, is_all_day=False):
         return f"{date_only}/{end_date_only}"
     else:
         start_iso = dt.strftime("%Y%m%dT%H%M%S")
-        end_iso = (dt + timedelta(hours=1)).strftime("%Y%m%dT%H%M%S")
+        # Removed the + timedelta(hours=1) so the end time is the exact same as the start time
+        end_iso = dt.strftime("%Y%m%dT%H%M%S")
         return f"{start_iso}/{end_iso}"
 
 # --- MOBILE-OPTIMIZED UI WIDGET ---
