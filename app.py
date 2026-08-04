@@ -407,7 +407,9 @@ with tab3:
                         soup = BeautifulSoup(response.text, 'html.parser')
                         for script in soup(["script", "style", "nav", "footer", "header"]):
                             script.extract()
-                        page_text = " ".join(soup.get_text().split())[:3500] 
+                            
+                        # INCREASED LIMIT TO 20,000 TO ENSURE NO TIERS ARE CUT OFF
+                        page_text = " ".join(soup.get_text().split())[:20000] 
 
                         genai.configure(api_key=api_key)
                         model = genai.GenerativeModel('gemini-2.5-flash')
