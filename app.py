@@ -109,6 +109,8 @@ if "pl_data" not in st.session_state:
     st.session_state.pl_data = None
 if "cup_data" not in st.session_state:
     st.session_state.cup_data = None
+if "away_data" not in st.session_state:
+    st.session_state.away_data = None
 
 # --- MAIN HEADER ---
 st.title("🔴 LFC Ticket Alerts")
@@ -116,7 +118,7 @@ st.markdown("Automate your Twitter sale alerts and calendar schedules instantly.
 st.write("")
 
 # --- TABS ---
-tab1, tab2 = st.tabs(["🏆 Premier League (Home)", "🏅 Cup Games (Home)"])
+tab1, tab2, tab3 = st.tabs(["🏆 Premier League (Home)", "🏅 Cup Games (Home)", "✈️ League Aways"])
 
 # ==========================================
 # TAB 1: PREMIER LEAGUE HOME GAMES
@@ -385,3 +387,116 @@ Match Date • {cup_m_date} 🏟️"""
                             st.warning(f"⚠️ Unable to parse format for: {ev['label']}")
                     else:
                         st.button(f"⚪ {ev['label']} (TBA)", disabled=True, use_container_width=True, key=f"tba_btn_cup_{i}_{ev['label']}")
+
+
+# ==========================================
+# TAB 3: LEAGUE AWAYS
+# ==========================================
+with tab3:
+    with st.container(border=True):
+        away_url = st.text_input("🔗 Ticket Page URL (Away):", placeholder="https://www.liverpoolfc.com/tickets/...", key="away_url")
+
+        if st.button("Scan Away Page 🔍", use_container_width=True, key="away_scan"):
+            if not away_url:
+                st.error("Please provide the URL.")
+            else:
+                with st.spinner("Analyzing Away ticketing page..."):
+                    try:
+                        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                        response = requests.get(away_url, headers=headers, timeout=5)
+                        soup = BeautifulSoup(response.text, 'html.parser')
+                        for script in soup(["script", "style", "nav", "footer", "header"]):
+                            script.extract()
+                        page_text = " ".join(soup.get_text().split())[:3500] 
+
+                        genai.configure(api_key=api_key)
+                        model = genai.GenerativeModel('gemini-2.5-flash')
+                        
+                        prompt = f"""
+                        Analyze the following raw text from an LFC Away match ticket page. Extract the exact names and dates.
+                        CRITICAL INSTRUCTION: DO NOT include any wheelchair, ambulant, or disabled ticket sales. Exclude these entirely from your results.
+                        Respond ONLY with a valid raw JSON object matching the structure below. 
+                        Use abbreviated days (e.g., Wed) and months (e.g., Nov) and format times like 10:00am or 11:00am.
+                        If any field is missing, make its value "TBA".
+                        For 'sales', create an array of objects for each credit/game tier you find (e.g., 14+ Games, 13+ Games, All Members).
+                        
+                        Desired JSON Format:
+                        {{
+                          "match_name": "Only the opponent team name",
+                          "sales": [
+                            {{"tier": "14+ Games", "open": "Day Date, Time", "close": "Day Date, Time"}},
+                            {{"tier": "13+ Games", "open": "Day Date, Time", "close": "Day Date, Time"}}
+                          ],
+                          "match_date": "Day Date, Time"
+                        }}
+                        Source Text: {page_text}
+                        """
+                        ai_response = model.generate_content(prompt)
+                        json_text = ai_response.text.strip().replace("```json", "").replace("```", "")
+                        import json
+                        st.session_state.away_data = json.loads(json_text)
+                        st.toast("✅ Away data successfully extracted!")
+                        
+                    except Exception as e:
+                        st.error(f"Failed to automatically pull details: {e}")
+
+    if st.session_state.away_data:
+        st.write("")
+        st.subheader("⚙️ Refine Details")
+        ad = st.session_state.away_data
+        
+        with st.container(border=True):
+            away_m_name = st.text_input("Opponent Team Name", value=ad.get("match_name", ""), key="away_m_name")
+        
+        with st.container(border=True):
+            st.markdown("#### 🎟️ Tiered Sales")
+            edited_away_sales = []
+            for i, sale in enumerate(ad.get("sales", [])):
+                with st.expander(f"Sale Tier {i+1} ({sale.get('tier', 'Unknown')})", expanded=True):
+                    t_name = st.text_input(f"Criteria", value=sale.get("tier", ""), key=f"away_tier_name_{i}")
+                    st.write("")
+                    t_open = editable_date_row("Opens", sale.get("open", ""), f"away_tier_open_{i}")
+                    t_close = editable_date_row("Closes", sale.get("close", ""), f"away_tier_close_{i}")
+                    edited_away_sales.append({"tier": t_name, "open": t_open, "close": t_close})
+
+        with st.container(border=True):
+            st.markdown("#### 🏟️ Match Details")
+            away_m_date = editable_date_row("Match Date & Time", ad.get("match_date", ""), "away_m_date")
+
+        st.write("")
+        if st.button("Generate Away Alerts 🚀", type="primary", use_container_width=True, key="away_gen"):
+            
+            sales_formatted_text = ""
+            for s in edited_away_sales:
+                sales_formatted_text += f"Sale ({s['tier']})\n• Opens: {s['open']}\n• Closes: {s['close']}\n\n"
+
+            tweet_output = f"""{away_m_name} (A) - Sale Details 📢\n\n{sales_formatted_text}Match Date • {away_m_date} 🏟️"""
+
+            with st.container(border=True):
+                st.markdown("### 🐦 Generated Away Tweet")
+                st.code(tweet_output.strip(), language="text")
+
+            with st.container(border=True):
+                st.markdown("### 📅 Calendar Schedule Links")
+
+                events = []
+                for s in edited_away_sales:
+                    events.append({"label": f"Sale Open ({s['tier']})", "name": f"{away_m_name} (A) - Sale Opens ({s['tier']})", "time": s['open'], "all_day": False})
+                    events.append({"label": f"Sale Close ({s['tier']})", "name": f"{away_m_name} (A) - Sale Closes ({s['tier']})", "time": s['close'], "all_day": False})
+
+                events.append({"label": "Match Day", "name": f"{away_m_name} (A) - Match Date", "time": away_m_date, "all_day": False})
+
+                for i, ev in enumerate(events):
+                    if ev["time"] and ev["time"] != "TBA":
+                        dt_obj = parse_to_datetime(ev["time"])
+                        gcal_dates = format_gcal_date(dt_obj, is_all_day=ev["all_day"])
+                        if gcal_dates:
+                            encoded_name = urllib.parse.quote(ev["name"])
+                            gcal_url = f"https://calendar.google.com/calendar/render?action=TEMPLATE&text={encoded_name}&dates={gcal_dates}"
+                            
+                            display_time = ev['time'].replace(' 09:00am', '')
+                            st.link_button(f"📅 Add **{ev['label']}** ({display_time})", gcal_url, use_container_width=True)
+                        else:
+                            st.warning(f"⚠️ Unable to parse format for: {ev['label']}")
+                    else:
+                        st.button(f"⚪ {ev['label']} (TBA)", disabled=True, use_container_width=True, key=f"tba_btn_away_{i}_{ev['label']}")
