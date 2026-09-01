@@ -140,11 +140,13 @@ with tab1:
                             script.extract()
                         page_text = " ".join(soup.get_text().split())[:3000]
 
-                        genai.configure(api_key=api_key)
+                       genai.configure(api_key=api_key)
                         model = genai.GenerativeModel('gemini-2.5-flash')
                         
+                        # REPLACE YOUR EXISTING PROMPT WITH THIS ONE:
                         prompt = f"""
                         Analyze the following raw text from an LFC ticket page. Extract the exact names and dates.
+                        The text may come from a standard fixture page or a news-style 'ticket-info' article. Search carefully through paragraphs, bullet points, and tables.
                         Respond ONLY with a valid raw JSON object matching these exact keys. 
                         Use abbreviated days (e.g., Wed) and months (e.g., Nov) and format times like 10:00am or 11:00am.
                         If any field is missing or not declared yet, make its value "TBA".
@@ -276,8 +278,13 @@ with tab2:
                         genai.configure(api_key=api_key)
                         model = genai.GenerativeModel('gemini-2.5-flash')
                         
+                        genai.configure(api_key=api_key)
+                        model = genai.GenerativeModel('gemini-2.5-flash')
+                        
+                        # REPLACE YOUR EXISTING PROMPT WITH THIS ONE:
                         prompt = f"""
                         Analyze the following raw text from an LFC Cup match ticket page. Extract the exact names and dates.
+                        The text may come from a standard fixture page or a news-style 'ticket-info' article. Search carefully through paragraphs, bullet points, and tables.
                         Respond ONLY with a valid raw JSON object matching the structure below. 
                         Use abbreviated days (e.g., Wed) and months (e.g., Nov) and format times like 10:00am or 11:00am.
                         If any field is missing, make its value "TBA".
@@ -285,7 +292,7 @@ with tab2:
                         
                         Desired JSON Format:
                         {{
-                          "match_name": "Only the opponent team name",
+                          "match_name": "Only the opponent team name (e.g., Tottenham)",
                           "sales": [
                             {{"tier": "5+ Games", "open": "Day Date, Time", "close": "Day Date, Time"}},
                             {{"tier": "4+ Games", "open": "Day Date, Time", "close": "Day Date, Time"}}
