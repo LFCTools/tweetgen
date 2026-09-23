@@ -667,7 +667,7 @@ Sale ({s['tier']})
 
 
 # ==========================================
-# TAB 4: CHAMPIONS LEAGUE AWAYS (League Away Format + Per-Tier Forwarding & Dynamic Info)
+# TAB 4: CHAMPIONS LEAGUE AWAYS
 # ==========================================
 with tab4:
     with st.container(border=True):
@@ -677,7 +677,7 @@ with tab4:
             if not cl_url:
                 st.error("Please provide the URL.")
             else:
-                with st.spinner("Analyzing Champions League Away page..."):
+                with st.spinner("Analyzing Champions League Away ticketing page..."):
                     try:
                         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
                         response = requests.get(cl_url, headers=headers, timeout=5)
@@ -691,37 +691,31 @@ with tab4:
                         model = genai.GenerativeModel('gemini-2.5-flash')
                         
                         prompt = f"""
-                        Analyze the following raw text from an LFC Champions League / European Away match ticket page. Exclude any disabled/wheelchair/ambulant sales. 
-                        Extract opponent match name, and for each sale tier extract:
-                        - 'tier': The eligibility criteria (e.g., Season Ticket Holders and All Red Members with a European Away Match Credit Balance of 9 or more)
-                        - 'open': Start date and time
-                        - 'close': End date and time
-                        - 'info': Information text if stated (e.g., Tickets in this sale are guaranteed, or subject to availability, etc., or leave empty)
-                        - 'forwarding_deadline': The specific Ticket Forwarding Deadline stated for that sale tier.
-                        Also extract match_date.
-
+                        Analyze the following raw text from an LFC Champions League / Away match ticket page. Exclude any disabled/wheelchair/ambulant sales. 
+                        Extract opponent name, sales tiers with open/close times, information text (e.g. "Tickets in this sale are guaranteed" or "subject to availability"), and the ticket forwarding deadline if present.
                         Respond ONLY with a valid raw JSON object matching the structure below. 
-                        Use abbreviated days (e.g., Wed) and months (e.g., Sep) and format times like 8:15am or 11:00am.
+                        Use abbreviated days (e.g., Wed) and months (e.g., Sep) and format times like 10:00am or 11:00am.
                         If any field is missing, make its value "TBA".
                         
                         Desired JSON Format:
                         {{
-                          "match_name": "Only the opponent team name (e.g., LASK)",
+                          "match_name": "Only the opponent team name (e.g., Lask)",
                           "sales": [
                             {{
                               "tier": "European Away Match Credit Balance of 9 or more",
-                              "open": "Wed 23 Sep 2026, 8:15am",
-                              "close": "Thurs 24 Sep 2026, 7:30am",
-                              "info": "Tickets in this sale are guaranteed.",
-                              "forwarding_deadline": "Thurs 24 Sep 2026, 11:00am"
+                              "open": "Day Date, Time",
+                              "close": "Day Date, Time",
+                              "info": "Tickets in this sale are guaranteed."
                             }}
                           ],
+                          "forwarding_deadline": "Day Date, Time",
                           "match_date": "Day Date, Time"
                         }}
                         Source Text: {page_text}
                         """
                         ai_response = model.generate_content(prompt)
                         json_text = ai_response.text.strip().replace("```json", "").replace("```", "")
+                        import json
                         st.session_state.cl_away_data = json.loads(json_text)
                         st.toast("✅ CL Away data successfully extracted!")
                         
@@ -735,18 +729,18 @@ with tab4:
         
         with st.container(border=True):
             cl_m_name = st.text_input("Opponent Team Name", value=cld.get("match_name", ""), key="cl_m_name")
-
+            cl_fwd = editable_date_row("Forwarding Deadline", cld.get("forwarding_deadline", "TBA"), "cl_fwd")
+        
         with st.container(border=True):
-            st.markdown("#### 🎟️ Tiered Sales & Forwarding Deadlines")
+            st.markdown("#### 🎟️ Tiered Sales")
             edited_cl_sales = []
             for i, sale in enumerate(cld.get("sales", [])):
                 with st.expander(f"Sale Tier {i+1} ({sale.get('tier', 'Unknown')})", expanded=True):
                     t_name = st.text_input(f"Criteria", value=sale.get("tier", ""), key=f"cl_tier_name_{i}")
                     t_open = editable_date_row("Opens", sale.get("open", ""), f"cl_tier_open_{i}")
                     t_close = editable_date_row("Closes", sale.get("close", ""), f"cl_tier_close_{i}")
-                    t_info = st.text_input("Information / Guarantee", value=sale.get("info", ""), key=f"cl_tier_info_{i}")
-                    t_fwd = editable_date_row("Forwarding Deadline", sale.get("forwarding_deadline", "TBA"), f"cl_tier_fwd_{i}")
-                    edited_cl_sales.append({"tier": t_name, "open": t_open, "close": t_close, "info": t_info, "forwarding_deadline": t_fwd})
+                    t_info = st.text_input("Information", value=sale.get("info", ""), key=f"cl_tier_info_{i}")
+                    edited_cl_sales.append({"tier": t_name, "open": t_open, "close": t_close, "info": t_info})
 
         with st.container(border=True):
             st.markdown("#### 🏟️ Match Details")
@@ -766,9 +760,13 @@ with tab4:
 Sale ({s['tier']})
 • Opens: {s['open']}
 • Closes: {s['close']}
-{info_line}Forwarding Deadline ➡️
-• Closes: {s['forwarding_deadline']}"""
+{info_line}"""
                     cl_tweets.append((f"🎟️ Sale ({s['tier']})", s['open'], sale_tweet))
+
+                if cl_fwd != "TBA":
+                    fwd_tweet = f"""Forwarding Deadline ➡️
+• Closes: {cl_fwd}"""
+                    cl_tweets.append(("➡️ Forwarding Deadline", cl_fwd, fwd_tweet))
 
                 for title, post_time, content in cl_tweets:
                     with st.expander(f"{title} — *Scheduled: {post_time}*"):
@@ -782,8 +780,8 @@ Sale ({s['tier']})
                 for s in edited_cl_sales:
                     events.append({"label": f"Sale Open ({s['tier']})", "name": f"{cl_m_name} (A) - Sale Opens ({s['tier']})", "time": s['open'], "all_day": False})
                     events.append({"label": f"Sale Close ({s['tier']})", "name": f"{cl_m_name} (A) - Sale Closes ({s['tier']})", "time": s['close'], "all_day": False})
-                    if s['forwarding_deadline'] != "TBA":
-                        events.append({"label": f"Forwarding Deadline ({s['tier']})", "name": f"{cl_m_name} (A) - Forwarding Deadline ({s['tier']})", "time": s['forwarding_deadline'], "all_day": False})
+                if cl_fwd != "TBA":
+                    events.append({"label": "Forwarding Deadline", "name": f"{cl_m_name} (A) - Forwarding Deadline", "time": cl_fwd, "all_day": False})
                 events.append({"label": "Match Day", "name": f"{cl_m_name} (A) - Match Date", "time": cl_m_date, "all_day": False})
 
                 for i, ev in enumerate(events):
