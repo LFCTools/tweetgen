@@ -316,7 +316,7 @@ with tab3:
 
 
 # ==========================================
-# TAB 4: CHAMPIONS LEAGUE AWAYS (Standard Page Parser)
+# TAB 4: CHAMPIONS LEAGUE AWAYS (Accordion Block Parser)
 # ==========================================
 with tab4:
     with st.container(border=True):
@@ -325,25 +325,38 @@ with tab4:
             if not cl_url:
                 st.error("Please provide the URL.")
             else:
-                with st.spinner("Analyzing CL Away page..."):
+                with st.spinner("Analyzing CL Away fixture page..."):
                     try:
                         headers = {'User-Agent': 'Mozilla/5.0'}
                         response = requests.get(cl_url, headers=headers, timeout=5)
                         soup = BeautifulSoup(response.text, 'html.parser')
                         for script in soup(["script", "style", "nav", "footer", "header"]):
                             script.extract()
-                        page_text = " ".join(soup.get_text().split())[:20000]
+                        page_text = " ".join(soup.get_text().split())[:25000]
 
                         genai.configure(api_key=api_key)
                         model = genai.GenerativeModel('gemini-2.5-flash')
                         prompt = f"""
-                        Analyze the following raw text from an LFC Champions League Away match ticket page. Exclude disabled sales. 
-                        Extract opponent name, sales tiers with open/close times, information (e.g. Guaranteed Sale), and ticket forwarding deadlines per tier.
+                        Analyze the following raw text from an LFC Champions League fixture page. Look for all sale blocks (BUY NOW / ON SALE SOON sections).
+                        For each sale block, extract:
+                        1. 'tier': The eligibility criteria (e.g. "Season Ticket Holders and All Red Members with a European Away Match Credit Balance of 9 or more").
+                        2. 'open' and 'close': Start and end times found in phrases like "Buy online from [Start] until [Close]".
+                        3. 'info': Guarantee status if stated (e.g. "Guaranteed Sale", "Non Guaranteed").
+                        4. 'forwarding_deadline': The specific forwarding deadline found in phrases like "Forwarding Deadline for tickets purchased in this sale is [Time]".
+
                         Desired JSON Format:
                         {{
                           "match_name": "LASK",
-                          "sales": [{{"tier": "Match Credit Balance of 9 or more", "open": "Day Date, Time", "close": "Day Date, Time", "info": "Guaranteed Sale", "forwarding_deadline": "Day Date, Time"}}],
-                          "match_date": "Day Date, Time"
+                          "sales": [
+                            {{
+                              "tier": "European Away Match Credit Balance of 9 or more",
+                              "open": "Wed 23 Sep 2026 8:15am",
+                              "close": "Thurs 24 Sep 2026 7:30am",
+                              "info": "Guaranteed Sale",
+                              "forwarding_deadline": "Thurs 24 Sep 2026 11:00am"
+                            }}
+                          ],
+                          "match_date": "TBA"
                         }}
                         Source Text: {page_text}
                         """
