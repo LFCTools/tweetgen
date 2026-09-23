@@ -97,7 +97,7 @@ def editable_date_row(label, default_val, key):
                 st.date_input("Date", key=f"{key}_date", disabled=st.session_state[f"{key}_tba"])
                 st.checkbox("TBA", key=f"{key}_tba")
             with c2:
-                st.time_input("Time", key=f"{key}_time", disabled=st.session_state[f"{key}_tba"] or st.session_state[f"{key}_allday"])
+                st.time_input("Time", key=f"{key}_time", disabled=st.session_state[f"{key}_tba"] or st.session_state[f"{key}_alld+ay"] or st.session_state[f"{key}_allday"])
                 st.checkbox("All Day", key=f"{key}_allday", disabled=st.session_state[f"{key}_tba"])
                 
     return display_val
@@ -150,23 +150,26 @@ with tab1:
                         model = genai.GenerativeModel('gemini-2.5-flash')
                         
                         prompt = f"""
-                        Analyze the following raw text from an LFC ticket page. Extract the exact names and dates.
-                        The text may come from a standard fixture page or a news-style 'ticket-info' article. Search carefully through paragraphs, bullet points, and tables.
+                        Analyze the following raw text from an LFC Premier League ticket page. 
+                        Note: Even if multiple credit tiers (e.g., 4+, 3+, 2+, 1+, All Members) have separate blocks on the page, they usually share identical registration dates and times. Extract that unified registration window once.
+                        Also extract the individual ticket sale opening dates and times for each credit tier (e.g., 4+ Sale, 3+ Sale, etc.).
                         Respond ONLY with a valid raw JSON object matching these exact keys. 
                         Use abbreviated days (e.g., Wed) and months (e.g., Nov) and format times like 10:00am or 11:00am.
                         If any field is missing or not declared yet, make its value "TBA".
                         
                         Desired JSON Format:
                         {{
-                          "match_name": "Only the opponent team name (e.g., Sunderland)",
-                          "criteria": "All Members or 4+ Members",
+                          "match_name": "Only the opponent team name (e.g., Manchester City)",
                           "reg_open": "Day Date, Time",
                           "reg_close": "Day Date, Time",
                           "links_sent": "Day Date",
+                          "sales": [
+                            {{"tier": "4+ Members", "open": "Day Date, Time"}},
+                            {{"tier": "3+ Members", "open": "Day Date, Time"}}
+                          ],
                           "ballot_open": "Day Date, Time",
                           "ballot_close": "Day Date, Time",
                           "ballot_results": "TBA or Day Date",
-                          "ticket_sale": "Day Date, Time",
                           "match_date": "Day Date, Time"
                         }}
                         Source Text: {page_text}
@@ -186,18 +189,27 @@ with tab1:
         d = st.session_state.pl_data
         
         with st.container(border=True):
-            col1, col2 = st.columns(2)
-            with col1:
-                pl_m_name = st.text_input("Opponent Team Name", value=d.get("match_name", ""), key="pl_m_name")
-            with col2:
-                pl_crit = st.selectbox("Sale Criteria", ["All Members", "4+ Members"], index=0 if d.get("criteria") == "All Members" else 1, key="pl_crit")
+            pl_m_name = st.text_input("Opponent Team Name", value=d.get("match_name", ""), key="pl_m_name")
 
         with st.container(border=True):
-            st.markdown("#### 📝 Registration & Sale")
+            st.markdown("#### 📝 Registration & Unique Links")
             pl_r_open = editable_date_row("Registration Opens", d.get("reg_open", ""), "pl_r_open")
             pl_r_close = editable_date_row("Registration Closes", d.get("reg_close", ""), "pl_r_close")
             pl_l_sent = editable_date_row("Links Sent", d.get("links_sent", ""), "pl_l_sent")
-            pl_t_sale = editable_date_row("Ticket Sale Opens", d.get("ticket_sale", ""), "pl_t_sale")
+
+        with st.container(border=True):
+            st.markdown("#### 🎟️ Tiered Ticket Sales")
+            edited_pl_sales = []
+            sales_list = d.get("sales", [])
+            if not sales_list and "ticket_sale" in d: # Fallback support for older schema format
+                sales_list = [{"tier": d.get("criteria", "4+ Members"), "open": d.get("ticket_sale", "")}]
+                
+            for i, sale in enumerate(sales_list):
+                with st.expander(f"Sale Tier {i+1} ({sale.get('tier', 'Unknown')})", expanded=True):
+                    t_name = st.text_input(f"Criteria", value=sale.get("tier", ""), key=f"pl_tier_name_{i}")
+                    st.write("")
+                    t_open = editable_date_row("Sale Opens", sale.get("open", ""), f"pl_tier_open_{i}")
+                    edited_pl_sales.append({"tier": t_name, "open": t_open})
 
         with st.container(border=True):
             st.markdown("#### 🗳️ Local Ballot")
@@ -211,31 +223,31 @@ with tab1:
 
         st.write("")
         if st.button("Generate PL Alerts & Tweet Schedule 🚀", type="primary", use_container_width=True, key="pl_gen"):
-            sale_label = "Sale (4+ Members)" if pl_crit == "4+ Members" else "Sale"
+            
+            sales_formatted_text = ""
+            for s in edited_pl_sales:
+                sales_formatted_text += f"• {s['tier']} Sale: {s['open']}\n"
             
             # --- TWEET TEMPLATES ---
             announcement_tweet = f"""{pl_m_name} (H) - Sale Details 📢\n
-Registration ({pl_crit}) 📝
+Registration (All Tiers) 📝
 • Opens: {pl_r_open}
 • Closes: {pl_r_close}
 • Links sent: {pl_l_sent}\n
-{sale_label} • {pl_t_sale} 🎟️\n
+Ticket Sales 🎟️\n{sales_formatted_text}
 Local & YA Ballot 🗳️
 • Opens: {pl_b_open}
 • Closes: {pl_b_close}
 • Results: {pl_b_res}\n
 Match Date • {pl_m_date} 🏟️"""
 
-            reg_open_tweet = f"🚨 Registration ({pl_crit}) for {pl_m_name} (H) is NOW OPEN!\n\nMake sure to register before {pl_r_close} to secure your eligibility. 📝🔴"
-            reg_close_tweet = f"⏰ REGISTRATION CLOSING SOON!\n\nRegistration ({pl_crit}) for {pl_m_name} (H) closes today at {pl_r_close}. Don't miss out! 📝"
+            reg_open_tweet = f"🚨 Registration for {pl_m_name} (H) is NOW OPEN!\n\nMake sure to register before {pl_r_close} to secure your eligibility. 📝🔴"
+            reg_close_tweet = f"⏰ REGISTRATION CLOSING SOON!\n\nRegistration for {pl_m_name} (H) closes today at {pl_r_close}. Don't miss out! 📝"
             
             ballot_open_tweet = f"🗳️ Local & Young Adult Ballot for {pl_m_name} (H) is NOW OPEN!\n\n• Opens: {pl_b_open}\n• Closes: {pl_b_close}\n\nGet your registrations submitted! 🔴"
             ballot_close_tweet = f"⏰ Local & YA Ballot registration for {pl_m_name} (H) closes today at {pl_b_close}! Make sure you're entered."
             ballot_res_tweet = f"✨ Local & YA Ballot results for {pl_m_name} (H) have been released! Check your emails and accounts to see if you were successful. 🗳️"
             
-            reminder_time = get_offset_time(pl_t_sale, hours_before=1)
-            reminder_tweet = f"🚨 1 HOUR TO GO!\n\nTickets for {pl_m_name} ({sale_label}) go on sale at {pl_t_sale}. Get logged in and ready! 🎟️🔴"
-
             st.write("")
             with st.container(border=True):
                 st.markdown("### 🐦 Scheduled Tweet Timeline")
@@ -247,9 +259,14 @@ Match Date • {pl_m_date} 🏟️"""
                     ("⏰ Registration Closing", pl_r_close, reg_close_tweet),
                     ("🗳️ Local & YA Ballot Open", pl_b_open, ballot_open_tweet),
                     ("⏰ Local & YA Ballot Closing", pl_b_close, ballot_close_tweet),
-                    ("✨ Local & YA Ballot Results", pl_b_res, ballot_res_tweet),
-                    ("🚨 Sale Reminder (1 Hour Before)", reminder_time, reminder_tweet)
+                    ("✨ Local & YA Ballot Results", pl_b_res, ballot_res_tweet)
                 ]
+
+                # Add a sale reminder for each credit tier 1 hour before it opens
+                for s in edited_pl_sales:
+                    rem_time = get_offset_time(s['open'], hours_before=1)
+                    rem_tweet = f"🚨 1 HOUR TO GO!\n\nTickets for {pl_m_name} ({s['tier']}) go on sale at {s['open']}. Get logged in and ready! 🎟️🔴"
+                    tweets_timeline.append((f"🚨 Sale Reminder ({s['tier']})", rem_time, rem_tweet))
 
                 for title, post_time, content in tweets_timeline:
                     with st.expander(f"{title} — *Scheduled: {post_time}*"):
@@ -264,10 +281,13 @@ Match Date • {pl_m_date} 🏟️"""
                     {"label": "Unique Links Sent", "name": f"{pl_m_name} (H) - Unique Links Sent", "time": f"{pl_l_sent} 09:00am" if pl_l_sent != "TBA" else "TBA", "all_day": True},
                     {"label": "Local Ballot Open", "name": f"{pl_m_name} (H) - Local Ballot Opens", "time": pl_b_open, "all_day": False},
                     {"label": "Local Ballot Closes", "name": f"{pl_m_name} (H) - Local Ballot Closes", "time": pl_b_close, "all_day": False},
-                    {"label": "Local Ballot Results", "name": f"{pl_m_name} (H) - Local Ballot Results", "time": f"{pl_b_res} 09:00am" if pl_b_res != "TBA" else "TBA", "all_day": True},
-                    {"label": "Ticket Sale Opens", "name": f"{pl_m_name} (H) - Ticket Sale", "time": pl_t_sale, "all_day": False},
-                    {"label": "Match Day", "name": f"{pl_m_name} (H) - Match Date", "time": pl_m_date, "all_day": False}
+                    {"label": "Local Ballot Results", "name": f"{pl_m_name} (H) - Local Ballot Results", "time": f"{pl_b_res} 09:00am" if pl_b_res != "TBA" else "TBA", "all_day": True}
                 ]
+
+                for s in edited_pl_sales:
+                    events.append({"label": f"Ticket Sale ({s['tier']})", "name": f"{pl_m_name} (H) - Sale ({s['tier']})", "time": s['open'], "all_day": False})
+
+                events.append({"label": "Match Day", "name": f"{pl_m_name} (H) - Match Date", "time": pl_m_date, "all_day": False})
 
                 for i, ev in enumerate(events):
                     if ev["time"] and ev["time"] != "TBA":
@@ -310,7 +330,6 @@ with tab2:
                         
                         prompt = f"""
                         Analyze the following raw text from an LFC Cup match ticket page. Extract the exact names and dates.
-                        The text may come from a standard fixture page or a news-style 'ticket-info' article. Search carefully through paragraphs, bullet points, and tables.
                         Respond ONLY with a valid raw JSON object matching the structure below. 
                         Use abbreviated days (e.g., Wed) and months (e.g., Nov) and format times like 10:00am or 11:00am.
                         If any field is missing, make its value "TBA".
@@ -412,7 +431,7 @@ Match Date • {cup_m_date} 🏟️"""
                     {"label": "ACS Payment Run", "name": f"{cup_m_name} (H) - ACS Payment Run", "time": f"{cup_acs_start} 09:00am" if cup_acs_start != "TBA" else "TBA", "all_day": True},
                     {"label": "Local Ballot Open", "name": f"{cup_m_name} (H) - Local Ballot Opens", "time": cup_b_open, "all_day": False},
                     {"label": "Local Ballot Closes", "name": f"{cup_m_name} (H) - Local Ballot Closes", "time": cup_b_close, "all_day": False},
-                    {"label": "Local Ballot Results", "name": f"{cup_m_name} (H) - Local Ballot Results", "time": f"{cup_b_res} 09:00am" if cup_b_res != "TBA" else "TBA", "all_day": True}
+                    {"label": "Local Ballot Results", "name": f"{cup_m_name} (H) - Local Ballot Results", "time": cup_b_res, "all_day": True}
                 ]
 
                 for s in edited_sales:
