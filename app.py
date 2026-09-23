@@ -600,3 +600,14 @@ Sale ({s['tier']})
                             st.warning(f"⚠️ Unable to parse format for: {ev['label']}")
                     else:
                         st.button(f"⚪ {ev['label']} (TBA)", disabled=True, use_container_width=True, key=f"tba_btn_away_{i}_{ev['label']}")
+import urllib.parse
+
+def get_twitter_intent_url(text):
+    encoded_text = urllib.parse.quote(text)
+    return f"https://twitter.com/intent/tweet?text={encoded_text}"
+
+# Inside your Streamlit app:
+tweet_text = "Fulham (H) - All Members Sale opens soon..."
+x_url = get_twitter_intent_url(tweet_text)
+
+st.link_button("🐦 Open & Post on X", x_url, use_container_width=True)
