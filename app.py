@@ -66,6 +66,21 @@ def get_x_intent_url(text):
     encoded_text = urllib.parse.quote(text)
     return f"https://twitter.com/intent/tweet?text={encoded_text}"
 
+def get_hallmap_link(opponent_name):
+    """Returns the correct Discord hallmap message link based on the opponent team."""
+    base_msg_url = "https://discord.com/channels/1433125109811511346/1518135652531830785"
+    
+    # You can map specific opponent names to their respective Discord message IDs from your channel list
+    # Fallback to the main channel/message if not explicitly mapped
+    opponent_mapping = {
+        # Example mappings (replace message IDs with your actual Discord anchor links for each opponent if desired)
+        # "Arsenal": f"{base_msg_url}/1518135652531830785",
+        # "Manchester City": f"{base_msg_url}/1518135652531830785",
+    }
+    
+    clean_name = opponent_name.strip().title()
+    return opponent_mapping.get(clean_name, "https://discord.com/channels/1433125109811511346/1518135652531830785/1518135652531830785")
+
 # --- MOBILE-OPTIMIZED UI WIDGET ---
 def editable_date_row(label, default_val, key):
     """Creates a single-line toggle that drops down editing tools when active."""
@@ -242,7 +257,7 @@ Match Date • {pl_m_date} 🏟️"""
             reg_tweet = f"""{pl_m_name} (H) - Registration 📢
 
 Registration (All Members) 📝
-• Opens: {pl_r_open}
+• Opens: Now
 • Closes: {pl_r_close}
 
 • Sale links sent: {pl_l_sent}
@@ -253,19 +268,27 @@ Sale 🎟️
             ballots_open_tweet = f"""{pl_m_name} (H) - Ballots 📢
 
 Local Ballots & YA Ballot 🗳️
-• Opens: {pl_b_open}
+• Opens: Now
 • Closes: {pl_b_close}
 
 • Results: {pl_b_res}
 
 https://ticketing.liverpoolfc.com/tickets/ballots"""
 
-            ballots_close_tweet = ballots_open_tweet
+            ballots_close_tweet = f"""{pl_m_name} (H) - Ballots 📢
+
+Local Ballots & YA Ballot 🗳️
+• Opens: {pl_b_open}
+• Closes: Now
+
+• Results: {pl_b_res}
+
+https://ticketing.liverpoolfc.com/tickets/ballots"""
 
             ballots_res_tweet = f"""{pl_m_name} (H) - Local & YA Ballots 📢
 
 Local & YA Ballot Results 🗳️
-• Results {pl_b_res}
+• Results today
 • Ensure you have funds in your bank 
 
 Comment below if successful 👇"""
@@ -282,6 +305,8 @@ Comment below if successful 👇"""
                     ("✨ Local & YA Ballot Results", pl_b_res, ballots_res_tweet)
                 ]
 
+                hallmap_url = get_hallmap_link(pl_m_name)
+
                 for s in edited_pl_sales:
                     rem_time = get_offset_time(s['open'], hours_before=1)
                     link_time = get_offset_time(s['open'], hours_before=0.5)
@@ -291,7 +316,8 @@ Comment below if successful 👇"""
 • Opens: {s['open']}
 • Click unique links from {link_time}
 
-Hallmap link  👇"""
+Hallmap link  👇
+{hallmap_url}"""
                     tweets_timeline.append((f"🎟️ Sale Reminder & Unique Links ({s['tier']})", rem_time, rem_tweet))
 
                 for title, post_time, content in tweets_timeline:
@@ -423,7 +449,7 @@ with tab2:
             ballots_res_tweet = f"""{cup_m_name} (H) - Local Ballots 📢
 
 Local Ballot Results 🗳️
-• Results {cup_b_res}
+• Results today
 • Ensure you have funds in your bank 
 
 Comment below if successful 👇"""
