@@ -268,11 +268,23 @@ Local & YA Ballots 🗳️
 • Results: {pl_b_res}\n
 Match Date • {pl_m_date} 🏟️"""
 
-            reg_tweet = f"""{pl_m_name} (H) - Registration 📢
+            reg_open_tweet = f"""{pl_m_name} (H) - Registration 📢
 
 Registration (All Members) 📝
 • Opens: Now
 • Closes: {pl_r_close}
+
+• Sale links sent: {pl_l_sent}
+
+Sale 🎟️
+• {edited_pl_sales[0]['open'] if edited_pl_sales else 'TBA'}"""
+
+            reg_close_time_str = pl_r_close.split(', ')[-1] if ',' in pl_r_close else pl_r_close
+            reg_close_tweet = f"""{pl_m_name} (H) - Registration 📢
+
+Registration (All Members) 📝
+• Opens: Now
+• Closes: Today {reg_close_time_str}
 
 • Sale links sent: {pl_l_sent}
 
@@ -289,11 +301,12 @@ Local Ballots & YA Ballot 🗳️
 
 https://ticketing.liverpoolfc.com/tickets/ballots"""
 
+            ballots_close_time_str = pl_b_close.split(', ')[-1] if ',' in pl_b_close else pl_b_close
             ballots_close_tweet = f"""{pl_m_name} (H) - Ballots 📢
 
 Local Ballots & YA Ballot 🗳️
 • Opens: Now
-• Closes: Today {pl_b_close.split(', ')[-1] if ',' in pl_b_close else pl_b_close}
+• Closes: Today {ballots_close_time_str}
 
 • Results: {pl_b_res}
 
@@ -313,7 +326,8 @@ Comment below if successful 👇"""
                 
                 tweets_timeline = [
                     ("📢 Sales Detail Announcement", "Immediate / Upon Scanning", announcement_tweet),
-                    ("📝 Registration Opening/Closing Notice", pl_r_open, reg_tweet),
+                    ("📝 Registration Opening Notice", pl_r_open, reg_open_tweet),
+                    ("⏰ Registration Closing Notice", pl_r_close, reg_close_tweet),
                     ("🗳️ Ballots Opening", pl_b_open, ballots_open_tweet),
                     ("⏰ Ballots Closing", pl_b_close, ballots_close_tweet),
                     ("✨ Local & YA Ballot Results", pl_b_res, ballots_res_tweet)
