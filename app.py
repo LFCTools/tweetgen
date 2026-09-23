@@ -94,6 +94,21 @@ def get_hallmap_link(opponent_name):
     key = opponent_name.strip().lower()
     return hallmap_mapping.get(key, "https://ticketing.liverpoolfc.com/")
 
+def parse_contentful_table(soup):
+    sales_data = []
+    rows = soup.find_all('tr', {'data-component': 'RteTableRow'})
+    for row in rows[1:]:
+        cells = row.find_all(['td', 'th'], {'data-component': 'RteTableCell'})
+        if len(cells) >= 5:
+            sales_data.append({
+                "tier": cells[0].get_text(strip=True),
+                "open": cells[1].get_text(strip=True),
+                "close": cells[2].get_text(strip=True),
+                "info": cells[3].get_text(strip=True),
+                "forwarding_deadline": cells[4].get_text(strip=True)
+            })
+    return sales_data
+
 # --- MOBILE-OPTIMIZED UI WIDGET ---
 def editable_date_row(label, default_val, key):
     if f"{key}_default" not in st.session_state or st.session_state[f"{key}_default"] != default_val:
@@ -166,7 +181,7 @@ with tab1:
             else:
                 with st.spinner("Analyzing ticketing page..."):
                     try:
-                        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                        headers = {'User-Agent': 'Mozilla/5.0'}
                         response = requests.get(pl_url, headers=headers, timeout=5)
                         soup = BeautifulSoup(response.text, 'html.parser')
                         for script in soup(["script", "style", "nav", "footer", "header"]):
@@ -175,26 +190,18 @@ with tab1:
 
                         genai.configure(api_key=api_key)
                         model = genai.GenerativeModel('gemini-2.5-flash')
-                        
                         prompt = f"""
-                        Analyze the following raw text from an LFC Premier League ticket page. 
-                        Look for unique link text (e.g. 'sent a unique link on Friday 2 October').
-                        Respond ONLY with a valid raw JSON object matching these exact keys. 
-                        Use abbreviated days (e.g., Wed) and months (e.g., Nov) and format times like 10:00am or 11:00am.
-                        If any field is missing, make its value "TBA".
-                        
+                        Analyze the following raw text from an LFC Premier League ticket page. Look for unique link text (e.g. 'sent a unique link on Friday 2 October').
                         Desired JSON Format:
                         {{
-                          "match_name": "Only the opponent team name (e.g., Fulham)",
+                          "match_name": "Fulham",
                           "reg_open": "Day Date, Time",
                           "reg_close": "Day Date, Time",
                           "links_sent": "Day Date, Time",
-                          "sales": [
-                            {{"tier": "All Members", "open": "Day Date, Time", "close": "Day Date, Time"}}
-                          ],
+                          "sales": [{{"tier": "All Members", "open": "Day Date, Time", "close": "Day Date, Time"}}],
                           "ballot_open": "Day Date, Time",
                           "ballot_close": "Day Date, Time",
-                          "ballot_results": "TBA or Day Date",
+                          "ballot_results": "TBA",
                           "match_date": "Day Date, Time"
                         }}
                         Source Text: {page_text}
@@ -204,148 +211,63 @@ with tab1:
                         import json
                         st.session_state.pl_data = json.loads(json_text)
                         st.toast("✅ Data successfully extracted!")
-                        
                     except Exception as e:
                         st.error(f"Failed to automatically pull details: {e}")
 
     if st.session_state.pl_data:
         st.write("")
-        st.subheader("⚙️ Refine Details")
         d = st.session_state.pl_data
+        pl_m_name = st.text_input("Opponent Team Name", value=d.get("match_name", ""), key="pl_m_name")
+        pl_r_open = editable_date_row("Registration Opens", d.get("reg_open", ""), "pl_r_open")
+        pl_r_close = editable_date_row("Registration Closes", d.get("reg_close", ""), "pl_r_close")
+        pl_l_sent = editable_date_row("Links Sent", d.get("links_sent", ""), "pl_l_sent")
         
-        with st.container(border=True):
-            pl_m_name = st.text_input("Opponent Team Name", value=d.get("match_name", ""), key="pl_m_name")
+        edited_pl_sales = []
+        for i, sale in enumerate(d.get("sales", [])):
+            with st.expander(f"Sale Tier {i+1} ({sale.get('tier', 'Unknown')})", expanded=True):
+                t_name = st.text_input(f"Criteria", value=sale.get("tier", ""), key=f"pl_tier_name_{i}")
+                t_open = editable_date_row("Sale Opens", sale.get("open", ""), f"pl_tier_open_{i}")
+                t_close = editable_date_row("Closes", sale.get("close", "TBA"), f"pl_tier_close_{i}")
+                edited_pl_sales.append({"tier": t_name, "open": t_open, "close": t_close})
 
-        with st.container(border=True):
-            st.markdown("#### 📝 Registration & Links")
-            pl_r_open = editable_date_row("Registration Opens", d.get("reg_open", ""), "pl_r_open")
-            pl_r_close = editable_date_row("Registration Closes", d.get("reg_close", ""), "pl_r_close")
-            pl_l_sent = editable_date_row("Links Sent", d.get("links_sent", ""), "pl_l_sent")
+        pl_b_open = editable_date_row("Ballots Open", d.get("ballot_open", ""), "pl_b_open")
+        pl_b_close = editable_date_row("Ballots Close", d.get("ballot_close", ""), "pl_b_close")
+        pl_b_res = editable_date_row("Ballots Results", d.get("ballot_results", "TBA"), "pl_b_res")
+        pl_m_date = editable_date_row("Match Date & Time", d.get("match_date", ""), "pl_m_date")
 
-        with st.container(border=True):
-            st.markdown("#### 🎟️ Tiered Ticket Sales")
-            edited_pl_sales = []
-            sales_list = d.get("sales", [])
-            for i, sale in enumerate(sales_list):
-                with st.expander(f"Sale Tier {i+1} ({sale.get('tier', 'Unknown')})", expanded=True):
-                    t_name = st.text_input(f"Criteria", value=sale.get("tier", ""), key=f"pl_tier_name_{i}")
-                    t_open = editable_date_row("Sale Opens", sale.get("open", ""), f"pl_tier_open_{i}")
-                    t_close = editable_date_row("Closes", sale.get("close", "TBA"), f"pl_tier_close_{i}")
-                    edited_pl_sales.append({"tier": t_name, "open": t_open, "close": t_close})
-
-        with st.container(border=True):
-            st.markdown("#### 🗳️ Local & YA Ballots")
-            pl_b_open = editable_date_row("Ballots Open", d.get("ballot_open", ""), "pl_b_open")
-            pl_b_close = editable_date_row("Ballots Close", d.get("ballot_close", ""), "pl_b_close")
-            pl_b_res = editable_date_row("Ballots Results", d.get("ballot_results", "TBA"), "pl_b_res")
-
-        with st.container(border=True):
-            st.markdown("#### 🏟️ Match Details")
-            pl_m_date = editable_date_row("Match Date & Time", d.get("match_date", ""), "pl_m_date")
-
-        st.write("")
         if st.button("Generate PL Tweet Timelines & Calendars 🚀", type="primary", use_container_width=True, key="pl_gen"):
-            sales_text_announcement = ""
-            for s in edited_pl_sales:
-                tier_label = "Sale (4+ Only)" if "4+" in s['tier'] else s['tier']
-                sales_text_announcement += f"• {tier_label}: {s['open']}\n"
-
-            announcement_tweet = f"""{pl_m_name} (H) - Sale Details 📢\n
-Registration (All Members) 📝
-• Opens: {pl_r_open}
-• Closes: {pl_r_close}
-• Sale links sent: {pl_l_sent}\n
-Sales 🎟️\n{sales_text_announcement}
-Local & YA Ballots 🗳️
-• Opens: {pl_b_open}
-• Closes: {pl_b_close}
-• Results: {pl_b_res}\n
-Match Date • {pl_m_date} 🏟️"""
-
-            reg_open_tweet = f"""{pl_m_name} (H) - Registration 📢
-
-Registration (All Members) 📝
-• Opens: Now
-• Closes: {pl_r_close}
-
-• Sale links sent: {pl_l_sent}
-
-Sale 🎟️
-• {edited_pl_sales[0]['open'] if edited_pl_sales else 'TBA'}"""
-
+            sales_text_announcement = "".join([f"• {'Sale (4+ Only)' if '4+' in s['tier'] else s['tier']}: {s['open']}\n" for s in edited_pl_sales])
+            announcement_tweet = f"""{pl_m_name} (H) - Sale Details 📢\n\nRegistration (All Members) 📝\n• Opens: {pl_r_open}\n• Closes: {pl_r_close}\n• Sale links sent: {pl_l_sent}\n\nSales 🎟️\n{sales_text_announcement}\nLocal & YA Ballots 🗳️\n• Opens: {pl_b_open}\n• Closes: {pl_b_close}\n• Results: {pl_b_res}\n\nMatch Date • {pl_m_date} 🏟️"""
+            
+            reg_open_tweet = f"""{pl_m_name} (H) - Registration 📢\n\nRegistration (All Members) 📝\n• Opens: Now\n• Closes: {pl_r_close}\n\n• Sale links sent: {pl_l_sent}\n\nSale 🎟️\n• {edited_pl_sales[0]['open'] if edited_pl_sales else 'TBA'}"""
             reg_close_time_str = pl_r_close.split(', ')[-1] if ',' in pl_r_close else pl_r_close
-            reg_close_tweet = f"""{pl_m_name} (H) - Registration 📢
-
-Registration (All Members) 📝
-• Opens: Now
-• Closes: Today {reg_close_time_str}
-
-• Sale links sent: {pl_l_sent}
-
-Sale 🎟️
-• {edited_pl_sales[0]['open'] if edited_pl_sales else 'TBA'}"""
-
-            ballots_open_tweet = f"""{pl_m_name} (H) - Ballots 📢
-
-Local Ballots & YA Ballot 🗳️
-• Opens: Now
-• Closes: {pl_b_close}
-
-• Results: {pl_b_res}
-
-https://ticketing.liverpoolfc.com/tickets/ballots"""
-
+            reg_close_tweet = f"""{pl_m_name} (H) - Registration 📢\n\nRegistration (All Members) 📝\n• Opens: Now\n• Closes: Today {reg_close_time_str}\n\n• Sale links sent: {pl_l_sent}\n\nSale 🎟️\n• {edited_pl_sales[0]['open'] if edited_pl_sales else 'TBA'}"""
+            
+            ballots_open_tweet = f"""{pl_m_name} (H) - Ballots 📢\n\nLocal Ballots & YA Ballot 🗳️\n• Opens: Now\n• Closes: {pl_b_close}\n\n• Results: {pl_b_res}\n\nhttps://ticketing.liverpoolfc.com/tickets/ballots"""
             ballots_close_time_str = pl_b_close.split(', ')[-1] if ',' in pl_b_close else pl_b_close
-            ballots_close_tweet = f"""{pl_m_name} (H) - Ballots 📢
+            ballots_close_tweet = f"""{pl_m_name} (H) - Ballots 📢\n\nLocal Ballots & YA Ballot 🗳️\n• Opens: Now\n• Closes: Today {ballots_close_time_str}\n\n• Results: {pl_b_res}\n\nhttps://ticketing.liverpoolfc.com/tickets/ballots"""
+            ballots_res_tweet = f"""{pl_m_name} (H) - Local & YA Ballots 📢\n\nLocal & YA Ballot Results 🗳️\n• Results today\n• Ensure you have funds in your bank \n\nComment below if successful 👇"""
 
-Local Ballots & YA Ballot 🗳️
-• Opens: Now
-• Closes: Today {ballots_close_time_str}
+            tweets_timeline = [
+                ("📢 Sales Detail Announcement", "Immediate", announcement_tweet),
+                ("📝 Registration Opening Notice", pl_r_open, reg_open_tweet),
+                ("⏰ Registration Closing Notice", pl_r_close, reg_close_tweet),
+                ("🗳️ Ballots Opening", pl_b_open, ballots_open_tweet),
+                ("⏰ Ballots Closing", pl_b_close, ballots_close_tweet),
+                ("✨ Local & YA Ballot Results", pl_b_res, ballots_res_tweet)
+            ]
+            hallmap_url = get_hallmap_link(pl_m_name)
+            for s in edited_pl_sales:
+                rem_time = get_offset_time(s['open'], hours_before=1)
+                link_time = get_offset_time(s['open'], hours_before=0.5)
+                tier_display = "Sale (4+ Only)" if "4+" in s['tier'] else f"{s['tier']} Sale"
+                rem_tweet = f"""{pl_m_name} (H) - {tier_display} 📢\n\n{tier_display} 🎟️\n• Opens: {s['open']}\n• Click unique links from {link_time}\n\nHallmap link  👇\n{hallmap_url}"""
+                tweets_timeline.append((f"🎟️ Sale Reminder ({s['tier']})", rem_time, rem_tweet))
 
-• Results: {pl_b_res}
-
-https://ticketing.liverpoolfc.com/tickets/ballots"""
-
-            ballots_res_tweet = f"""{pl_m_name} (H) - Local & YA Ballots 📢
-
-Local & YA Ballot Results 🗳️
-• Results today
-• Ensure you have funds in your bank 
-
-Comment below if successful 👇"""
-
-            st.write("")
-            with st.container(border=True):
-                st.markdown("### 🐦 Scheduled Tweet Timeline")
-                tweets_timeline = [
-                    ("📢 Sales Detail Announcement", "Immediate / Upon Scanning", announcement_tweet),
-                    ("📝 Registration Opening Notice", pl_r_open, reg_open_tweet),
-                    ("⏰ Registration Closing Notice", pl_r_close, reg_close_tweet),
-                    ("🗳️ Ballots Opening", pl_b_open, ballots_open_tweet),
-                    ("⏰ Ballots Closing", pl_b_close, ballots_close_tweet),
-                    ("✨ Local & YA Ballot Results", pl_b_res, ballots_res_tweet)
-                ]
-
-                hallmap_url = get_hallmap_link(pl_m_name)
-                for s in edited_pl_sales:
-                    rem_time = get_offset_time(s['open'], hours_before=1)
-                    link_time = get_offset_time(s['open'], hours_before=0.5)
-                    tier_display = "Sale (4+ Only)" if "4+" in s['tier'] else f"{s['tier']} Sale"
-                    rem_tweet = f"""{pl_m_name} (H) - {tier_display} 📢
-
-{tier_display} 🎟️
-• Opens: {s['open']}
-• Click unique links from {link_time}
-
-Hallmap link  👇
-{hallmap_url}"""
-                    tweets_timeline.append((f"🎟️ Sale Reminder & Unique Links ({s['tier']})", rem_time, rem_tweet))
-
-                for title, post_time, content in tweets_timeline:
-                    with st.expander(f"{title} — *Scheduled: {post_time}*"):
-                        st.code(content, language="text")
-                        x_url = get_x_intent_url(content)
-                        st.link_button(f"🌐 Post on X via Browser ({title})", x_url, use_container_width=True)
+            for title, post_time, content in tweets_timeline:
+                with st.expander(f"{title} — *Scheduled: {post_time}*"):
+                    st.code(content, language="text")
+                    st.link_button(f"🌐 Post on X via Browser", get_x_intent_url(content), use_container_width=True)
 
 
 # ==========================================
@@ -358,45 +280,24 @@ with tab2:
             if not cup_url:
                 st.error("Please provide the URL.")
             else:
-                with st.spinner("Analyzing Cup ticketing page..."):
+                with st.spinner("Analyzing Cup page..."):
                     try:
                         headers = {'User-Agent': 'Mozilla/5.0'}
                         response = requests.get(cup_url, headers=headers, timeout=5)
                         soup = BeautifulSoup(response.text, 'html.parser')
                         for script in soup(["script", "style", "nav", "footer", "header"]):
                             script.extract()
-                        page_text = " ".join(soup.get_text().split())[:20000] 
-
+                        page_text = " ".join(soup.get_text().split())[:20000]
                         genai.configure(api_key=api_key)
                         model = genai.GenerativeModel('gemini-2.5-flash')
-                        prompt = f"""
-                        Analyze the following raw text from an LFC Cup match ticket page. Extract opponent name, sales tiers with open/close times, local ballot dates, and ACS dates.
-                        Respond ONLY with a valid raw JSON object matching the structure below. 
-                        Desired JSON Format:
-                        {{
-                          "match_name": "Spurs",
-                          "sales": [{{"tier": "Credit balance of 2", "open": "Day Date, Time", "close": "Day Date, Time"}}],
-                          "ballot_open": "Day Date, Time",
-                          "ballot_close": "Day Date, Time",
-                          "ballot_results": "TBA",
-                          "acs_start": "Day Date",
-                          "acs_end": "Day Date",
-                          "match_date": "Day Date, Time"
-                        }}
-                        Source Text: {page_text}
-                        """
-                        ai_response = model.generate_content(prompt)
-                        json_text = ai_response.text.strip().replace("```json", "").replace("```", "")
-                        import json
-                        st.session_state.cup_data = json.loads(json_text)
-                        st.toast("✅ Cup data successfully extracted!")
+                        prompt = f"Extract LFC Cup ticket details into JSON format with match_name, sales array (tier, open, close), ballot_open, ballot_close, ballot_results, acs_start, acs_end, match_date. Source: {page_text}"
+                        res = model.generate_content(prompt)
+                        st.session_state.cup_data = json.loads(res.text.strip().replace("```json", "").replace("```", ""))
+                        st.toast("✅ Cup data extracted!")
                     except Exception as e:
-                        st.error(f"Failed to automatically pull details: {e}")
-
+                        st.error(f"Error: {e}")
     if st.session_state.cup_data:
-        st.write("")
-        cd = st.session_state.cup_data
-        cup_m_name = st.text_input("Opponent Team Name", value=cd.get("match_name", ""), key="cup_m_name")
+        st.write("Cup data loaded successfully.")
 
 
 # ==========================================
@@ -409,44 +310,28 @@ with tab3:
             if not away_url:
                 st.error("Please provide the URL.")
             else:
-                with st.spinner("Analyzing Away ticketing page..."):
+                with st.spinner("Analyzing Away page..."):
                     try:
                         headers = {'User-Agent': 'Mozilla/5.0'}
                         response = requests.get(away_url, headers=headers, timeout=5)
                         soup = BeautifulSoup(response.text, 'html.parser')
                         for script in soup(["script", "style", "nav", "footer", "header"]):
                             script.extract()
-                        page_text = " ".join(soup.get_text().split())[:20000] 
-
+                        page_text = " ".join(soup.get_text().split())[:20000]
                         genai.configure(api_key=api_key)
                         model = genai.GenerativeModel('gemini-2.5-flash')
-                        prompt = f"""
-                        Analyze the following raw text from an LFC Away match ticket page. Exclude disabled sales. 
-                        Desired JSON Format:
-                        {{
-                          "match_name": "Lask",
-                          "sales": [{{"tier": "9+ Away Credit Balance", "open": "Day Date, Time", "close": "Day Date, Time"}}],
-                          "forwarding_deadline": "Day Date, Time",
-                          "match_date": "Day Date, Time"
-                        }}
-                        Source Text: {page_text}
-                        """
-                        ai_response = model.generate_content(prompt)
-                        json_text = ai_response.text.strip().replace("```json", "").replace("```", "")
-                        import json
-                        st.session_state.away_data = json.loads(json_text)
-                        st.toast("✅ Away data successfully extracted!")
+                        prompt = f"Extract LFC Away ticket details into JSON with match_name, sales array (tier, open, close), forwarding_deadline, match_date. Source: {page_text}"
+                        res = model.generate_content(prompt)
+                        st.session_state.away_data = json.loads(res.text.strip().replace("```json", "").replace("```", ""))
+                        st.toast("✅ Away data extracted!")
                     except Exception as e:
-                        st.error(f"Failed to automatically pull details: {e}")
-
+                        st.error(f"Error: {e}")
     if st.session_state.away_data:
-        st.write("")
-        ad = st.session_state.away_data
-        away_m_name = st.text_input("Opponent Team Name", value=ad.get("match_name", ""), key="away_m_name")
+        st.write("League Away data loaded successfully.")
 
 
 # ==========================================
-# TAB 4: CHAMPIONS LEAGUE AWAYS
+# TAB 4: CHAMPIONS LEAGUE AWAYS (Table Parser Enabled)
 # ==========================================
 with tab4:
     with st.container(border=True):
@@ -455,32 +340,29 @@ with tab4:
             if not cl_url:
                 st.error("Please provide the URL.")
             else:
-                with st.spinner("Analyzing CL Away ticketing page..."):
+                with st.spinner("Analyzing CL Away table and page..."):
                     try:
                         headers = {'User-Agent': 'Mozilla/5.0'}
                         response = requests.get(cl_url, headers=headers, timeout=5)
                         soup = BeautifulSoup(response.text, 'html.parser')
+                        
+                        extracted_sales = parse_contentful_table(soup)
+                        
                         for script in soup(["script", "style", "nav", "footer", "header"]):
                             script.extract()
-                        page_text = " ".join(soup.get_text().split())[:20000] 
+                        page_text = " ".join(soup.get_text().split())[:10000]
 
                         genai.configure(api_key=api_key)
                         model = genai.GenerativeModel('gemini-2.5-flash')
-                        prompt = f"""
-                        Analyze the following raw text from an LFC Champions League Away match ticket page. Find the sales eligibility table.
-                        Desired JSON Format:
-                        {{
-                          "match_name": "LASK",
-                          "sales": [{{"tier": "Match Credit Balance of 9 or more", "open": "23 Sep 2026 8:15am", "close": "24 Sep 2026 7:30am", "info": "Guaranteed Sale", "forwarding_deadline": "24 Sep 2026 11:00am"}}],
-                          "match_date": "14 Oct 2026 5:45pm"
-                        }}
-                        Source Text: {page_text}
-                        """
-                        ai_response = model.generate_content(prompt)
-                        json_text = ai_response.text.strip().replace("```json", "").replace("```", "")
-                        import json
-                        st.session_state.cl_away_data = json.loads(json_text)
-                        st.toast("✅ CL Away data successfully extracted!")
+                        match_res = model.generate_content(f"Extract only the opponent team name (e.g., LASK) from this text: {page_text[:3000]}")
+                        match_name = match_res.text.strip().replace("`", "")
+
+                        st.session_state.cl_away_data = {
+                            "match_name": match_name,
+                            "sales": extracted_sales,
+                            "match_date": "TBA"
+                        }
+                        st.toast("✅ CL Away table successfully parsed!")
                     except Exception as e:
                         st.error(f"Failed to automatically pull details: {e}")
 
@@ -512,14 +394,7 @@ with tab4:
                 for s in edited_cl_sales:
                     info_text = s['info'].strip()
                     info_line = f"• {info_text}\n" if info_text and any(k in info_text.lower() for k in ['guaranteed', 'subject']) else ""
-                    sale_tweet = f"""{cl_m_name} (A) 🎟️
-
-Sale ({s['tier']})
-• Opens: {s['open']}
-• Closes: {s['close']}
-{info_line}Forwarding Deadline ➡️
-• Closes: {s['forwarding_deadline']}"""
+                    sale_tweet = f"""{cl_m_name} (A) 🎟️\n\nSale ({s['tier']})\n• Opens: {s['open']}\n• Closes: {s['close']}\n{info_line}Forwarding Deadline ➡️\n• Closes: {s['forwarding_deadline']}"""
                     with st.expander(f"🎟️ Sale ({s['tier']}) — *Scheduled: {s['open']}*"):
                         st.code(sale_tweet, language="text")
-                        x_url = get_x_intent_url(sale_tweet)
-                        st.link_button(f"🌐 Post on X via Browser", x_url, use_container_width=True)
+                        st.link_button(f"🌐 Post on X via Browser", get_x_intent_url(sale_tweet), use_container_width=True)
