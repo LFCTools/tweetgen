@@ -755,7 +755,10 @@ with tab4:
                 
                 cl_away_tweets = []
                 for s in edited_cl_sales:
-                    info_line = f"• {s['info']}\n" if s['info'].strip() else ""
+                    # Only include info line if it specifically contains Guaranteed, Non Guaranteed, or Subject to availability
+                    info_text = s['info'].strip()
+                    info_line = f"• {info_text}\n" if info_text and any(k in info_text.lower() for k in ['guaranteed', 'subject']) else ""
+                    
                     sale_tweet = f"""{cl_m_name} (A) 🎟️
 
 Sale ({s['tier']})
