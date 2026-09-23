@@ -95,6 +95,51 @@ def get_hallmap_link(opponent_name):
     key = opponent_name.strip().lower()
     return hallmap_mapping.get(key, "https://ticketing.liverpoolfc.com/")
 
+def parse_accordion_sales(soup):
+    sales_data = []
+    sections = soup.find_all('section', {'data-testid': 'ticketing-accordion-list-item'})
+    for sec in sections:
+        title_el = sec.find('span', {'data-testid': 'ticketing-accordion-list-item__title'})
+        assistive_el = sec.find('span', {'data-testid': 'ticketing-accordion-list-item__assistive-text'})
+        
+        tier_title = title_el.get_text(strip=True) if title_el else ""
+        tier_assistive = assistive_el.get_text(strip=True) if assistive_el else ""
+        tier_full = f"{tier_title} {tier_assistive}".strip()
+        
+        body_div = sec.find('div', {'data-testid': 'ticketing-accordion-list-item__body'})
+        body_text = body_div.get_text(separator=' ', strip=True) if body_div else ""
+        
+        open_time = "TBA"
+        close_time = "TBA"
+        info = ""
+        forwarding_deadline = "TBA"
+        
+        # Parse 'from [start] until [end]'
+        match_times = re.search(r'from\s+(.*?)\s+until\s+(.*?)(?:\.|$)', body_text, re.IGNORECASE)
+        if match_times:
+            open_time = match_times.group(1).strip()
+            close_time = match_times.group(2).strip()
+            
+        # Parse Guarantee / Info status
+        if 'guaranteed' in body_text.lower():
+            info = "Guaranteed Sale"
+        elif 'subject to availability' in body_text.lower():
+            info = "Subject to availability"
+            
+        # Parse Forwarding Deadline
+        match_fwd = re.search(r'Forwarding Deadline.*?is\s+(.*?)(?:\.|$)', body_text, re.IGNORECASE)
+        if match_fwd:
+            forwarding_deadline = match_fwd.group(1).strip()
+            
+        sales_data.append({
+            "tier": tier_full if tier_full else "Members Sale",
+            "open": open_time,
+            "close": close_time,
+            "info": info,
+            "forwarding_deadline": forwarding_deadline
+        })
+    return sales_data
+
 # --- MOBILE-OPTIMIZED UI WIDGET ---
 def editable_date_row(label, default_val, key):
     if f"{key}_default" not in st.session_state or st.session_state[f"{key}_default"] != default_val:
@@ -316,7 +361,7 @@ with tab3:
 
 
 # ==========================================
-# TAB 4: CHAMPIONS LEAGUE AWAYS (PL-Style Page Parser + Forwarding Deadlines)
+# TAB 4: CHAMPIONS LEAGUE AWAYS (Accordion Parser Enabled)
 # ==========================================
 with tab4:
     with st.container(border=True):
@@ -325,45 +370,31 @@ with tab4:
             if not cl_url:
                 st.error("Please provide the URL.")
             else:
-                with st.spinner("Analyzing CL Away fixture page..."):
+                with st.spinner("Analyzing CL Away fixture accordion blocks..."):
                     try:
                         headers = {'User-Agent': 'Mozilla/5.0'}
                         response = requests.get(cl_url, headers=headers, timeout=5)
                         soup = BeautifulSoup(response.text, 'html.parser')
+                        
+                        # 1. Directly parse accordion blocks using BeautifulSoup
+                        extracted_sales = parse_accordion_sales(soup)
+                        
+                        # 2. Extract opponent name via Gemini
                         for script in soup(["script", "style", "nav", "footer", "header"]):
                             script.extract()
-                        page_text = " ".join(soup.get_text().split())[:25000]
+                        page_text = " ".join(soup.get_text().split())[:10000]
 
                         genai.configure(api_key=api_key)
                         model = genai.GenerativeModel('gemini-2.5-flash')
-                        prompt = f"""
-                        Analyze the following raw text from an LFC Champions League match page. 
-                        Look for all sale accordion/BUY NOW sections. For each sale block, extract:
-                        1. 'tier': The eligibility criteria (e.g. "Season Ticket Holders and All Red Members with a European Away Match Credit Balance of 9 or more").
-                        2. 'open' and 'close': Start and end times found in phrases like "Buy online from [Start] until [Close]".
-                        3. 'info': Guarantee status if stated (e.g. "Guaranteed Sale", "Non Guaranteed").
-                        4. 'forwarding_deadline': The specific forwarding deadline found in phrases like "Forwarding Deadline for tickets purchased in this sale is [Time]".
+                        match_res = model.generate_content(f"Extract only the opponent team name (e.g., LASK) from this text: {page_text[:3000]}")
+                        match_name = match_res.text.strip().replace("`", "")
 
-                        Desired JSON Format:
-                        {{
-                          "match_name": "LASK",
-                          "sales": [
-                            {{
-                              "tier": "European Away Match Credit Balance of 9 or more",
-                              "open": "Wed 23 Sep 2026 8:15am",
-                              "close": "Thurs 24 Sep 2026 7:30am",
-                              "info": "Guaranteed Sale",
-                              "forwarding_deadline": "Thurs 24 Sep 2026 11:00am"
-                            }}
-                          ],
-                          "match_date": "Day Date, Time"
-                        }}
-                        Source Text: {page_text}
-                        """
-                        ai_response = model.generate_content(prompt)
-                        json_text = ai_response.text.strip().replace("```json", "").replace("```", "")
-                        st.session_state.cl_away_data = json.loads(json_text)
-                        st.toast("✅ CL Away data successfully extracted!")
+                        st.session_state.cl_away_data = {
+                            "match_name": match_name,
+                            "sales": extracted_sales,
+                            "match_date": "TBA"
+                        }
+                        st.toast("✅ CL Away accordion data successfully extracted!")
                     except Exception as e:
                         st.error(f"Failed to automatically pull details: {e}")
 
