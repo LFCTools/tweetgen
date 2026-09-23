@@ -90,7 +90,6 @@ def get_hallmap_link(opponent_name):
         "afc bournemouth": "https://ticketing.liverpoolfc.com/en-GB/events/liverpool%20v%20afc%20bournemouth/2027-5-30_15.00/anfield?hallmap",
         "bournemouth": "https://ticketing.liverpoolfc.com/en-GB/events/liverpool%20v%20afc%20bournemouth/2027-5-30_15.00/anfield?hallmap"
     }
-    
     key = opponent_name.strip().lower()
     return hallmap_mapping.get(key, "https://ticketing.liverpoolfc.com/")
 
@@ -183,8 +182,8 @@ with tab1:
                         
                         prompt = f"""
                         Analyze the following raw text from an LFC Premier League ticket page. 
-                        Carefully search the sale and registration sections for when unique links are sent to members.
-                        Extract unified registration details, local & YA ballot open/close/results dates, link sending dates, and ticket sale opening dates per tier (e.g. 4+ Members, All Members).
+                        CRITICAL INSTRUCTION FOR 'links_sent': Look inside the 'TICKET SALE' or sale details section for sentences mentioning 'unique link' (e.g., 'Eligible supporters will be sent a unique link on Friday 2 October...'). Extract that exact date/time.
+                        Extract unified registration details, local & YA ballot open/close/results dates, and ticket sale opening dates per tier (e.g. 4+ Members, All Members).
                         Respond ONLY with a valid raw JSON object matching these exact keys. 
                         Use abbreviated days (e.g., Wed) and months (e.g., Nov) and format times like 10:00am or 11:00am.
                         If any field is missing, make its value "TBA".
@@ -194,7 +193,7 @@ with tab1:
                           "match_name": "Only the opponent team name (e.g., Fulham)",
                           "reg_open": "Day Date, Time",
                           "reg_close": "Day Date, Time",
-                          "links_sent": "Day Date, Time",
+                          "links_sent": "Day Date",
                           "sales": [
                             {{"tier": "All Members", "open": "Day Date, Time", "close": "Day Date, Time"}}
                           ],
@@ -350,7 +349,7 @@ Hallmap link  👇
                     {"label": "Unique Links Sent", "name": f"{pl_m_name} (H) - Unique Links Sent", "time": pl_l_sent, "all_day": False},
                     {"label": "Ballots Open", "name": f"{pl_m_name} (H) - Ballots Open", "time": pl_b_open, "all_day": False},
                     {"label": "Ballots Close", "name": f"{pl_m_name} (H) - Ballots Close", "time": pl_b_close, "all_day": False},
-                    {"label": "Ballots Results", "name": f"{pl_m_name} (H) - Ballots Results", "time": f"{pl_b_res} 09:00am" if pl_b_res != "TBA" else "TBA", "all_day": True}
+                    {"label": "Ballots Results", "name": f"{pl_m_name} (H) - Ballots Results", "time": pl_b_res, "all_day": True}
                 ]
                 for s in edited_pl_sales:
                     events.append({"label": f"Sale ({s['tier']})", "name": f"{pl_m_name} (H) - Sale ({s['tier']})", "time": s['open'], "all_day": False})
