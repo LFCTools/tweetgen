@@ -62,6 +62,10 @@ def check_sale_duration(open_str, close_str):
         return diff_hours > 6
     return False
 
+def get_x_intent_url(text):
+    encoded_text = urllib.parse.quote(text)
+    return f"https://twitter.com/intent/tweet?text={encoded_text}"
+
 # --- MOBILE-OPTIMIZED UI WIDGET ---
 def editable_date_row(label, default_val, key):
     """Creates a single-line toggle that drops down editing tools when active."""
@@ -219,7 +223,6 @@ with tab1:
         st.write("")
         if st.button("Generate PL Tweet Timelines & Calendars 🚀", type="primary", use_container_width=True, key="pl_gen"):
             
-            # --- FORMATTED TEMPLATES ---
             sales_text_announcement = ""
             for s in edited_pl_sales:
                 sales_text_announcement += f"• {s['tier']} Sale: {s['open']}\n"
@@ -257,7 +260,7 @@ Local Ballots & YA Ballot 🗳️
 
 https://ticketing.liverpoolfc.com/tickets/ballots"""
 
-            ballots_close_tweet = ballots_open_tweet # Same format as requested
+            ballots_close_tweet = ballots_open_tweet
 
             ballots_res_tweet = f"""{pl_m_name} (H) - Local & YA Ballots 📢
 
@@ -294,13 +297,15 @@ Hallmap link  👇"""
                 for title, post_time, content in tweets_timeline:
                     with st.expander(f"{title} — *Scheduled: {post_time}*"):
                         st.code(content, language="text")
+                        x_url = get_x_intent_url(content)
+                        st.link_button(f"🌐 Post on X via Browser ({title})", x_url, use_container_width=True)
 
             with st.container(border=True):
                 st.markdown("### 📅 Calendar Schedule Links")
                 events = [
                     {"label": "Registration Open", "name": f"{pl_m_name} (H) - Registration Opens", "time": pl_r_open, "all_day": False},
                     {"label": "Registration Closes", "name": f"{pl_m_name} (H) - Registration Closes", "time": pl_r_close, "all_day": False},
-                    {"label": "Unique Links Sent", "name": f"{pl_m_name} (H) - Unique Links Sent", "time": f"{pl_l_sent}", "all_day": False},
+                    {"label": "Unique Links Sent", "name": f"{pl_m_name} (H) - Unique Links Sent", "time": pl_l_sent, "all_day": False},
                     {"label": "Ballots Open", "name": f"{pl_m_name} (H) - Ballots Open", "time": pl_b_open, "all_day": False},
                     {"label": "Ballots Close", "name": f"{pl_m_name} (H) - Ballots Close", "time": pl_b_close, "all_day": False},
                     {"label": "Ballots Results", "name": f"{pl_m_name} (H) - Ballots Results", "time": f"{pl_b_res} 09:00am" if pl_b_res != "TBA" else "TBA", "all_day": True}
@@ -451,6 +456,8 @@ Sale ({s['tier']})
                 for title, post_time, content in cup_tweets_timeline:
                     with st.expander(f"{title} — *Scheduled: {post_time}*"):
                         st.code(content, language="text")
+                        x_url = get_x_intent_url(content)
+                        st.link_button(f"🌐 Post on X via Browser ({title})", x_url, use_container_width=True)
 
             with st.container(border=True):
                 st.markdown("### 📅 Calendar Schedule Links")
@@ -577,6 +584,8 @@ Sale ({s['tier']})
                 for title, post_time, content in away_tweets:
                     with st.expander(f"{title} — *Scheduled: {post_time}*"):
                         st.code(content, language="text")
+                        x_url = get_x_intent_url(content)
+                        st.link_button(f"🌐 Post on X via Browser ({title})", x_url, use_container_width=True)
 
             with st.container(border=True):
                 st.markdown("### 📅 Calendar Schedule Links")
@@ -600,14 +609,3 @@ Sale ({s['tier']})
                             st.warning(f"⚠️ Unable to parse format for: {ev['label']}")
                     else:
                         st.button(f"⚪ {ev['label']} (TBA)", disabled=True, use_container_width=True, key=f"tba_btn_away_{i}_{ev['label']}")
-import urllib.parse
-
-def get_twitter_intent_url(text):
-    encoded_text = urllib.parse.quote(text)
-    return f"https://twitter.com/intent/tweet?text={encoded_text}"
-
-# Inside your Streamlit app:
-tweet_text = "Fulham (H) - All Members Sale opens soon..."
-x_url = get_twitter_intent_url(tweet_text)
-
-st.link_button("🐦 Open & Post on X", x_url, use_container_width=True)
