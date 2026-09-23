@@ -95,42 +95,44 @@ def get_hallmap_link(opponent_name):
     key = opponent_name.strip().lower()
     return hallmap_mapping.get(key, "https://ticketing.liverpoolfc.com/")
 
-def parse_accordion_sales(soup):
+def parse_accordion_html_blocks(soup):
     sales_data = []
     sections = soup.find_all('section', {'data-testid': 'ticketing-accordion-list-item'})
+    
     for sec in sections:
         title_el = sec.find('span', {'data-testid': 'ticketing-accordion-list-item__title'})
         assistive_el = sec.find('span', {'data-testid': 'ticketing-accordion-list-item__assistive-text'})
+        sale_date_el = sec.find('time', {'data-testid': 'ticketing-accordion-list-item__sale-date'})
+        body_div = sec.find('div', {'data-testid': 'ticketing-accordion-list-item__body'})
         
         tier_title = title_el.get_text(strip=True) if title_el else ""
         tier_assistive = assistive_el.get_text(strip=True) if assistive_el else ""
         tier_full = f"{tier_title} {tier_assistive}".strip()
         
-        body_div = sec.find('div', {'data-testid': 'ticketing-accordion-list-item__body'})
-        body_text = body_div.get_text(separator=' ', strip=True) if body_div else ""
-        
-        open_time = "TBA"
+        open_time = sale_date_el.get_text(strip=True) if sale_date_el else "TBA"
         close_time = "TBA"
         info = ""
         forwarding_deadline = "TBA"
         
-        # Parse 'from [start] until [end]'
-        match_times = re.search(r'from\s+(.*?)\s+until\s+(.*?)(?:\.|$)', body_text, re.IGNORECASE)
-        if match_times:
-            open_time = match_times.group(1).strip()
-            close_time = match_times.group(2).strip()
+        if body_div:
+            body_text = body_div.get_text(separator=' ', strip=True)
             
-        # Parse Guarantee / Info status
-        if 'guaranteed' in body_text.lower():
-            info = "Guaranteed Sale"
-        elif 'subject to availability' in body_text.lower():
-            info = "Subject to availability"
-            
-        # Parse Forwarding Deadline
-        match_fwd = re.search(r'Forwarding Deadline.*?is\s+(.*?)(?:\.|$)', body_text, re.IGNORECASE)
-        if match_fwd:
-            forwarding_deadline = match_fwd.group(1).strip()
-            
+            # Parse close time from 'until [close time]'
+            match_until = re.search(r'until\s+(.*?)(?:\.|$)', body_text, re.IGNORECASE)
+            if match_until:
+                close_time = match_until.group(1).strip()
+                
+            # Parse Guarantee status
+            if 'guaranteed' in body_text.lower():
+                info = "Guaranteed Sale"
+            elif 'subject to availability' in body_text.lower():
+                info = "Subject to availability"
+                
+            # Parse Forwarding Deadline
+            match_fwd = re.search(r'Forwarding Deadline.*?is\s+(.*?)(?:\.|$)', body_text, re.IGNORECASE)
+            if match_fwd:
+                forwarding_deadline = match_fwd.group(1).strip()
+                
         sales_data.append({
             "tier": tier_full if tier_full else "Members Sale",
             "open": open_time,
@@ -361,7 +363,7 @@ with tab3:
 
 
 # ==========================================
-# TAB 4: CHAMPIONS LEAGUE AWAYS (Accordion Parser Enabled)
+# TAB 4: CHAMPIONS LEAGUE AWAYS (Direct HTML Accordion Parser)
 # ==========================================
 with tab4:
     with st.container(border=True):
@@ -370,16 +372,16 @@ with tab4:
             if not cl_url:
                 st.error("Please provide the URL.")
             else:
-                with st.spinner("Analyzing CL Away fixture accordion blocks..."):
+                with st.spinner("Analyzing CL Away accordion blocks..."):
                     try:
                         headers = {'User-Agent': 'Mozilla/5.0'}
                         response = requests.get(cl_url, headers=headers, timeout=5)
                         soup = BeautifulSoup(response.text, 'html.parser')
                         
-                        # 1. Directly parse accordion blocks using BeautifulSoup
-                        extracted_sales = parse_accordion_sales(soup)
+                        # Directly extract using our custom accordion parser function
+                        extracted_sales = parse_accordion_html_blocks(soup)
                         
-                        # 2. Extract opponent name via Gemini
+                        # Extract opponent name via Gemini
                         for script in soup(["script", "style", "nav", "footer", "header"]):
                             script.extract()
                         page_text = " ".join(soup.get_text().split())[:10000]
@@ -394,7 +396,7 @@ with tab4:
                             "sales": extracted_sales,
                             "match_date": "TBA"
                         }
-                        st.toast("✅ CL Away accordion data successfully extracted!")
+                        st.toast("✅ CL Away accordion blocks parsed successfully!")
                     except Exception as e:
                         st.error(f"Failed to automatically pull details: {e}")
 
@@ -420,8 +422,7 @@ with tab4:
             cl_m_date = editable_date_row("Match Date & Time", cld.get("match_date", ""), "cl_m_date")
 
         st.write("")
-        if st.button("Generate CL Away Tweet Timelines & Calendars 🚀", type="primary", use_container_width=True, key="cl_gen"):
-            
+        if st.button("Generate CL Away Tweet Timelines & Calendars 🚀", type="primary", use_container_width=Key, key="cl_gen"):
             sales_text_announcement = "".join([f"• {s['tier']}: {s['open']}\n" for s in edited_cl_sales])
             announcement_tweet = f"""{cl_m_name} (A) - Sale Details 📢\n\nSales 🎟️\n{sales_text_announcement}\nMatch Date • {cl_m_date} 🏟️"""
 
@@ -441,3 +442,4 @@ with tab4:
                     with st.expander(f"{title} — *Scheduled: {post_time}*"):
                         st.code(content, language="text")
                         st.link_button(f"🌐 Post on X via Browser", get_x_intent_url(content), use_container_width=True)
+                    
