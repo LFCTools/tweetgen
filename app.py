@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 import urllib.parse
 from datetime import datetime, timedelta
 
-# --- HELPER FUNCTIONS FOR CALENDAR LINKS ---
+# --- HELPER FUNCTIONS FOR CALENDAR & TIME ---
 def parse_to_datetime(date_str):
     if not date_str or date_str == "TBA" or "[" in date_str:
         return None
@@ -45,9 +45,22 @@ def format_gcal_date(dt, is_all_day=False):
         return f"{date_only}/{end_date_only}"
     else:
         start_iso = dt.strftime("%Y%m%dT%H%M%S")
-        # End time is the exact same as the start time (0 duration)
         end_iso = dt.strftime("%Y%m%dT%H%M%S")
         return f"{start_iso}/{end_iso}"
+
+def get_offset_time(date_str, hours_before=1):
+    dt = parse_to_datetime(date_str)
+    if not dt: return "TBA"
+    new_dt = dt - timedelta(hours=hours_before)
+    return new_dt.strftime("%a %d %b, %I:%M%p").lstrip("0").lower()
+
+def check_sale_duration(open_str, close_str):
+    dt_open = parse_to_datetime(open_str)
+    dt_close = parse_to_datetime(close_str)
+    if dt_open and dt_close:
+        diff_hours = (dt_close - dt_open).total_seconds() / 3600
+        return diff_hours > 6
+    return False
 
 # --- MOBILE-OPTIMIZED UI WIDGET ---
 def editable_date_row(label, default_val, key):
@@ -91,7 +104,7 @@ def editable_date_row(label, default_val, key):
 
 
 # --- STREAMLIT CONFIG & STATE ---
-st.set_page_config(page_title="LFC Alerts", page_icon="🔴", layout="centered")
+st.set_page_config(page_title="LFC Alerts & Scheduler", page_icon="🔴", layout="centered")
 
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
@@ -107,8 +120,8 @@ if "away_data" not in st.session_state:
     st.session_state.away_data = None
 
 # --- MAIN HEADER ---
-st.title("🔴 LFC Ticket Alerts")
-st.markdown("Automate your Twitter sale alerts and calendar schedules instantly.")
+st.title("🔴 LFC Ticket Alerts & Tweet Scheduler")
+st.markdown("Automate your sale announcements, scheduled tweet timelines, and calendar schedules instantly.")
 st.write("")
 
 # --- TABS ---
@@ -197,10 +210,11 @@ with tab1:
             pl_m_date = editable_date_row("Match Date & Time", d.get("match_date", ""), "pl_m_date")
 
         st.write("")
-        if st.button("Generate PL Alerts 🚀", type="primary", use_container_width=True, key="pl_gen"):
+        if st.button("Generate PL Alerts & Tweet Schedule 🚀", type="primary", use_container_width=True, key="pl_gen"):
             sale_label = "Sale (4+ Members)" if pl_crit == "4+ Members" else "Sale"
             
-            tweet_output = f"""{pl_m_name} (H) - Sale Details 📢\n
+            # --- TWEET TEMPLATES ---
+            announcement_tweet = f"""{pl_m_name} (H) - Sale Details 📢\n
 Registration ({pl_crit}) 📝
 • Opens: {pl_r_open}
 • Closes: {pl_r_close}
@@ -212,10 +226,34 @@ Local & YA Ballot 🗳️
 • Results: {pl_b_res}\n
 Match Date • {pl_m_date} 🏟️"""
 
+            reg_open_tweet = f"🚨 Registration ({pl_crit}) for {pl_m_name} (H) is NOW OPEN!\n\nMake sure to register before {pl_r_close} to secure your eligibility. 📝🔴"
+            reg_close_tweet = f"⏰ REGISTRATION CLOSING SOON!\n\nRegistration ({pl_crit}) for {pl_m_name} (H) closes today at {pl_r_close}. Don't miss out! 📝"
+            
+            ballot_open_tweet = f"🗳️ Local & Young Adult Ballot for {pl_m_name} (H) is NOW OPEN!\n\n• Opens: {pl_b_open}\n• Closes: {pl_b_close}\n\nGet your registrations submitted! 🔴"
+            ballot_close_tweet = f"⏰ Local & YA Ballot registration for {pl_m_name} (H) closes today at {pl_b_close}! Make sure you're entered."
+            ballot_res_tweet = f"✨ Local & YA Ballot results for {pl_m_name} (H) have been released! Check your emails and accounts to see if you were successful. 🗳️"
+            
+            reminder_time = get_offset_time(pl_t_sale, hours_before=1)
+            reminder_tweet = f"🚨 1 HOUR TO GO!\n\nTickets for {pl_m_name} ({sale_label}) go on sale at {pl_t_sale}. Get logged in and ready! 🎟️🔴"
+
             st.write("")
             with st.container(border=True):
-                st.markdown("### 🐦 Generated Tweet")
-                st.code(tweet_output, language="text")
+                st.markdown("### 🐦 Scheduled Tweet Timeline")
+                st.info("Here are your standard sale tweets mapped out with their suggested posting schedule:")
+                
+                tweets_timeline = [
+                    ("📢 Sales Detail Announcement", "Immediate / Upon Scanning", announcement_tweet),
+                    ("📝 Registration Open", pl_r_open, reg_open_tweet),
+                    ("⏰ Registration Closing", pl_r_close, reg_close_tweet),
+                    ("🗳️ Local & YA Ballot Open", pl_b_open, ballot_open_tweet),
+                    ("⏰ Local & YA Ballot Closing", pl_b_close, ballot_close_tweet),
+                    ("✨ Local & YA Ballot Results", pl_b_res, ballot_res_tweet),
+                    ("🚨 Sale Reminder (1 Hour Before)", reminder_time, reminder_tweet)
+                ]
+
+                for title, post_time, content in tweets_timeline:
+                    with st.expander(f"{title} — *Scheduled: {post_time}*"):
+                        st.code(content, language="text")
 
             with st.container(border=True):
                 st.markdown("### 📅 Calendar Schedule Links")
@@ -335,13 +373,13 @@ with tab2:
             cup_m_date = editable_date_row("Match Date & Time", cd.get("match_date", ""), "cup_m_date")
 
         st.write("")
-        if st.button("Generate Cup Alerts 🚀", type="primary", use_container_width=True, key="cup_gen"):
+        if st.button("Generate Cup Alerts & Tweet Schedule 🚀", type="primary", use_container_width=True, key="cup_gen"):
             
             sales_formatted_text = ""
             for s in edited_sales:
                 sales_formatted_text += f"Sale ({s['tier']})\n• Opens: {s['open']}\n• Closes: {s['close']}\n\n"
 
-            tweet_output = f"""{cup_m_name} (H) - Sale Details 📢\n\n{sales_formatted_text}Local Ballot 🗳️
+            announcement_tweet = f"""{cup_m_name} (H) - Sale Details 📢\n\n{sales_formatted_text}Local Ballot 🗳️
 • Opens: {cup_b_open}
 • Closes: {cup_b_close}
 • Results: {cup_b_res}\n
@@ -349,9 +387,23 @@ ACS Payment Run 💰
 • {cup_acs_start} - {cup_acs_end}\n
 Match Date • {cup_m_date} 🏟️"""
 
+            cup_tweets_timeline = [
+                ("📢 Cup Sales Announcement", "Immediate / Upon Scanning", announcement_tweet),
+                ("🗳️ Local & YA Ballot Open", cup_b_open, f"Local & YA Ballot for {cup_m_name} (H) is now open! 🗳️ Opens: {cup_b_open}, Closes: {cup_b_close}."),
+                ("⏰ Local & YA Ballot Closing", cup_b_close, f"Local & YA Ballot for {cup_m_name} (H) closes today at {cup_b_close}! ⏰"),
+                ("✨ Local & YA Ballot Results", cup_b_res, f"Local & YA Ballot results for {cup_m_name} (H) are out! Check your status. ✨")
+            ]
+
+            for s in edited_sales:
+                cup_tweets_timeline.append((f"🎟️ Sale Opening ({s['tier']})", s['open'], f"Tickets for {cup_m_name} ({s['tier']}) are NOW ON SALE! 🎟️ Good luck."))
+                if check_sale_duration(s['open'], s['close']):
+                    cup_tweets_timeline.append((f"⏰ Sale Closing ({s['tier']})", s['close'], f"🚨 Sale closing soon! Tickets for {cup_m_name} ({s['tier']}) close at {s['close']}."))
+
             with st.container(border=True):
-                st.markdown("### 🐦 Generated Cup Tweet")
-                st.code(tweet_output.strip(), language="text")
+                st.markdown("### 🐦 Scheduled Cup Tweet Timeline")
+                for title, post_time, content in cup_tweets_timeline:
+                    with st.expander(f"{title} — *Scheduled: {post_time}*"):
+                        st.code(content, language="text")
 
             with st.container(border=True):
                 st.markdown("### 📅 Calendar Schedule Links")
