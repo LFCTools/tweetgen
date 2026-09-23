@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 import urllib.parse
 from datetime import datetime, timedelta
 import re
+import json
 
 # --- ROBUST HELPER FUNCTIONS FOR CALENDAR & TIME ---
 def parse_to_datetime(date_str):
@@ -93,21 +94,6 @@ def get_hallmap_link(opponent_name):
     }
     key = opponent_name.strip().lower()
     return hallmap_mapping.get(key, "https://ticketing.liverpoolfc.com/")
-
-def parse_contentful_table(soup):
-    sales_data = []
-    rows = soup.find_all('tr', {'data-component': 'RteTableRow'})
-    for row in rows[1:]:
-        cells = row.find_all(['td', 'th'], {'data-component': 'RteTableCell'})
-        if len(cells) >= 5:
-            sales_data.append({
-                "tier": cells[0].get_text(strip=True),
-                "open": cells[1].get_text(strip=True),
-                "close": cells[2].get_text(strip=True),
-                "info": cells[3].get_text(strip=True),
-                "forwarding_deadline": cells[4].get_text(strip=True)
-            })
-    return sales_data
 
 # --- MOBILE-OPTIMIZED UI WIDGET ---
 def editable_date_row(label, default_val, key):
@@ -208,7 +194,6 @@ with tab1:
                         """
                         ai_response = model.generate_content(prompt)
                         json_text = ai_response.text.strip().replace("```json", "").replace("```", "")
-                        import json
                         st.session_state.pl_data = json.loads(json_text)
                         st.toast("✅ Data successfully extracted!")
                     except Exception as e:
@@ -331,7 +316,7 @@ with tab3:
 
 
 # ==========================================
-# TAB 4: CHAMPIONS LEAGUE AWAYS (Table Parser Enabled)
+# TAB 4: CHAMPIONS LEAGUE AWAYS (Standard Page Parser)
 # ==========================================
 with tab4:
     with st.container(border=True):
@@ -340,29 +325,32 @@ with tab4:
             if not cl_url:
                 st.error("Please provide the URL.")
             else:
-                with st.spinner("Analyzing CL Away table and page..."):
+                with st.spinner("Analyzing CL Away page..."):
                     try:
                         headers = {'User-Agent': 'Mozilla/5.0'}
                         response = requests.get(cl_url, headers=headers, timeout=5)
                         soup = BeautifulSoup(response.text, 'html.parser')
-                        
-                        extracted_sales = parse_contentful_table(soup)
-                        
                         for script in soup(["script", "style", "nav", "footer", "header"]):
                             script.extract()
-                        page_text = " ".join(soup.get_text().split())[:10000]
+                        page_text = " ".join(soup.get_text().split())[:20000]
 
                         genai.configure(api_key=api_key)
                         model = genai.GenerativeModel('gemini-2.5-flash')
-                        match_res = model.generate_content(f"Extract only the opponent team name (e.g., LASK) from this text: {page_text[:3000]}")
-                        match_name = match_res.text.strip().replace("`", "")
-
-                        st.session_state.cl_away_data = {
-                            "match_name": match_name,
-                            "sales": extracted_sales,
-                            "match_date": "TBA"
-                        }
-                        st.toast("✅ CL Away table successfully parsed!")
+                        prompt = f"""
+                        Analyze the following raw text from an LFC Champions League Away match ticket page. Exclude disabled sales. 
+                        Extract opponent name, sales tiers with open/close times, information (e.g. Guaranteed Sale), and ticket forwarding deadlines per tier.
+                        Desired JSON Format:
+                        {{
+                          "match_name": "LASK",
+                          "sales": [{{"tier": "Match Credit Balance of 9 or more", "open": "Day Date, Time", "close": "Day Date, Time", "info": "Guaranteed Sale", "forwarding_deadline": "Day Date, Time"}}],
+                          "match_date": "Day Date, Time"
+                        }}
+                        Source Text: {page_text}
+                        """
+                        ai_response = model.generate_content(prompt)
+                        json_text = ai_response.text.strip().replace("```json", "").replace("```", "")
+                        st.session_state.cl_away_data = json.loads(json_text)
+                        st.toast("✅ CL Away data successfully extracted!")
                     except Exception as e:
                         st.error(f"Failed to automatically pull details: {e}")
 
