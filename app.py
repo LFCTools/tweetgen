@@ -69,17 +69,7 @@ def get_x_intent_url(text):
 def get_hallmap_link(opponent_name):
     """Returns the correct Discord hallmap message link based on the opponent team."""
     base_msg_url = "https://discord.com/channels/1433125109811511346/1518135652531830785"
-    
-    # You can map specific opponent names to their respective Discord message IDs from your channel list
-    # Fallback to the main channel/message if not explicitly mapped
-    opponent_mapping = {
-        # Example mappings (replace message IDs with your actual Discord anchor links for each opponent if desired)
-        # "Arsenal": f"{base_msg_url}/1518135652531830785",
-        # "Manchester City": f"{base_msg_url}/1518135652531830785",
-    }
-    
-    clean_name = opponent_name.strip().title()
-    return opponent_mapping.get(clean_name, "https://discord.com/channels/1433125109811511346/1518135652531830785/1518135652531830785")
+    return f"{base_msg_url}/1518135652531830785"
 
 # --- MOBILE-OPTIMIZED UI WIDGET ---
 def editable_date_row(label, default_val, key):
@@ -170,6 +160,7 @@ with tab1:
                         
                         prompt = f"""
                         Analyze the following raw text from an LFC Premier League ticket page. 
+                        Carefully search the sale and registration sections for when unique links are sent to members.
                         Extract unified registration details, local & YA ballot open/close/results dates, link sending dates, and ticket sale opening dates per tier (e.g. 4+ Members, All Members).
                         Respond ONLY with a valid raw JSON object matching these exact keys. 
                         Use abbreviated days (e.g., Wed) and months (e.g., Nov) and format times like 10:00am or 11:00am.
@@ -240,10 +231,11 @@ with tab1:
             
             sales_text_announcement = ""
             for s in edited_pl_sales:
-                sales_text_announcement += f"• {s['tier']} Sale: {s['open']}\n"
+                tier_label = "Sale (4+ Only)" if "4+" in s['tier'] else s['tier']
+                sales_text_announcement += f"• {tier_label}: {s['open']}\n"
 
             announcement_tweet = f"""{pl_m_name} (H) - Sale Details 📢\n
-Registration (All Tiers) 📝
+Registration (All Members) 📝
 • Opens: {pl_r_open}
 • Closes: {pl_r_close}
 • Sale links sent: {pl_l_sent}\n
@@ -278,8 +270,8 @@ https://ticketing.liverpoolfc.com/tickets/ballots"""
             ballots_close_tweet = f"""{pl_m_name} (H) - Ballots 📢
 
 Local Ballots & YA Ballot 🗳️
-• Opens: {pl_b_open}
-• Closes: Now
+• Opens: Now
+• Closes: Today {pl_b_close.split(', ')[-1] if ',' in pl_b_close else pl_b_close}
 
 • Results: {pl_b_res}
 
@@ -310,9 +302,10 @@ Comment below if successful 👇"""
                 for s in edited_pl_sales:
                     rem_time = get_offset_time(s['open'], hours_before=1)
                     link_time = get_offset_time(s['open'], hours_before=0.5)
-                    rem_tweet = f"""{pl_m_name} (H) - {s['tier']} Sale 📢
+                    tier_display = "Sale (4+ Only)" if "4+" in s['tier'] else f"{s['tier']} Sale"
+                    rem_tweet = f"""{pl_m_name} (H) - {tier_display} 📢
 
-{s['tier']} Sale 🎟️
+{tier_display} 🎟️
 • Opens: {s['open']}
 • Click unique links from {link_time}
 
