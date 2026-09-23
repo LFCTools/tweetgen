@@ -316,7 +316,7 @@ with tab3:
 
 
 # ==========================================
-# TAB 4: CHAMPIONS LEAGUE AWAYS (Accordion Block Parser)
+# TAB 4: CHAMPIONS LEAGUE AWAYS (PL-Style Page Parser + Forwarding Deadlines)
 # ==========================================
 with tab4:
     with st.container(border=True):
@@ -337,8 +337,8 @@ with tab4:
                         genai.configure(api_key=api_key)
                         model = genai.GenerativeModel('gemini-2.5-flash')
                         prompt = f"""
-                        Analyze the following raw text from an LFC Champions League fixture page. Look for all sale blocks (BUY NOW / ON SALE SOON sections).
-                        For each sale block, extract:
+                        Analyze the following raw text from an LFC Champions League match page. 
+                        Look for all sale accordion/BUY NOW sections. For each sale block, extract:
                         1. 'tier': The eligibility criteria (e.g. "Season Ticket Holders and All Red Members with a European Away Match Credit Balance of 9 or more").
                         2. 'open' and 'close': Start and end times found in phrases like "Buy online from [Start] until [Close]".
                         3. 'info': Guarantee status if stated (e.g. "Guaranteed Sale", "Non Guaranteed").
@@ -356,7 +356,7 @@ with tab4:
                               "forwarding_deadline": "Thurs 24 Sep 2026 11:00am"
                             }}
                           ],
-                          "match_date": "TBA"
+                          "match_date": "Day Date, Time"
                         }}
                         Source Text: {page_text}
                         """
@@ -390,12 +390,23 @@ with tab4:
 
         st.write("")
         if st.button("Generate CL Away Tweet Timelines & Calendars 🚀", type="primary", use_container_width=True, key="cl_gen"):
+            
+            sales_text_announcement = "".join([f"• {s['tier']}: {s['open']}\n" for s in edited_cl_sales])
+            announcement_tweet = f"""{cl_m_name} (A) - Sale Details 📢\n\nSales 🎟️\n{sales_text_announcement}\nMatch Date • {cl_m_date} 🏟️"""
+
+            cl_tweets_timeline = [
+                ("📢 CL Away Sales Announcement", "Immediate", announcement_tweet)
+            ]
+
+            for s in edited_cl_sales:
+                info_text = s['info'].strip()
+                info_line = f"• {info_text}\n" if info_text else ""
+                sale_tweet = f"""{cl_m_name} (A) 🎟️\n\nSale ({s['tier']})\n• Opens: {s['open']}\n• Closes: {s['close']}\n{info_line}Forwarding Deadline ➡️\n• Closes: {s['forwarding_deadline']}"""
+                cl_tweets_timeline.append((f"🎟️ Sale ({s['tier']})", s['open'], sale_tweet))
+
             with st.container(border=True):
                 st.markdown("### 🐦 Scheduled CL Away Tweet Timeline")
-                for s in edited_cl_sales:
-                    info_text = s['info'].strip()
-                    info_line = f"• {info_text}\n" if info_text and any(k in info_text.lower() for k in ['guaranteed', 'subject']) else ""
-                    sale_tweet = f"""{cl_m_name} (A) 🎟️\n\nSale ({s['tier']})\n• Opens: {s['open']}\n• Closes: {s['close']}\n{info_line}Forwarding Deadline ➡️\n• Closes: {s['forwarding_deadline']}"""
-                    with st.expander(f"🎟️ Sale ({s['tier']}) — *Scheduled: {s['open']}*"):
-                        st.code(sale_tweet, language="text")
-                        st.link_button(f"🌐 Post on X via Browser", get_x_intent_url(sale_tweet), use_container_width=True)
+                for title, post_time, content in cl_tweets_timeline:
+                    with st.expander(f"{title} — *Scheduled: {post_time}*"):
+                        st.code(content, language="text")
+                        st.link_button(f"🌐 Post on X via Browser", get_x_intent_url(content), use_container_width=True)
