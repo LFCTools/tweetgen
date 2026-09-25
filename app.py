@@ -206,7 +206,7 @@ except KeyError:
     st.error("⚠️ GEMINI_API_KEY is missing from Streamlit Secrets. Please add it to your dashboard to continue.")
     st.stop()
 
-for s_key in ["pl_data", "cup_data", "away_data", "cl_away_data"]:
+for s_key in ["pl_data", "cup_data", "away_data", "cl_away_data", "active_pl_tweets", "active_cl_tweets"]:
     if s_key not in st.session_state:
         st.session_state[s_key] = None
 
@@ -324,27 +324,56 @@ with tab1:
             ballots_close_tweet = f"""{pl_m_name} (H) - Ballots 📢\n\nLocal Ballots & YA Ballot 🗳️\n• Opens: Now\n• Closes: Today {ballots_close_time_str}\n\n• Results: {pl_b_res}\n\nhttps://ticketing.liverpoolfc.com/tickets/ballots"""
             ballots_res_tweet = f"""{pl_m_name} (H) - Local & YA Ballots 📢\n\nLocal & YA Ballot Results 🗳️\n• Results today\n• Ensure you have funds in your bank \n\nComment below if successful 👇"""
 
-            st.write("")
+            tweets_timeline = [
+                ("📢 Sales Detail Announcement", "Immediate / Upon Scanning", announcement_tweet),
+                ("📝 Registration Opening Notice", pl_r_open, reg_open_tweet),
+                ("⏰ Registration Closing Notice", pl_r_close, reg_close_tweet),
+                ("🗳️ Ballots Opening", pl_b_open, ballots_open_tweet),
+                ("⏰ Ballots Closing", pl_b_close, ballots_close_tweet),
+                ("✨ Local & YA Ballot Results", pl_b_res, ballots_res_tweet)
+            ]
+
+            hallmap_url = get_hallmap_link(pl_m_name)
+            for s in edited_pl_sales:
+                rem_time = get_offset_time(s['open'], hours_before=1)
+                link_time = get_offset_time(s['open'], hours_before=0.5)
+                tier_display = "Sale (4+ Only)" if "4+" in s['tier'] else f"{s['tier']} Sale"
+                rem_tweet = f"""{pl_m_name} (H) - {tier_display} 📢\n\n{tier_display} 🎟️\n• Opens: {s['open']}\n• Click unique links from {link_time}\n\nHallmap link  👇\n{hallmap_url}"""
+                tweets_timeline.append((f"🎟️ Sale Reminder & Unique Links ({s['tier']})", rem_time, rem_tweet))
+
+            st.session_state["active_pl_tweets"] = tweets_timeline
+
+        # Display timeline and Buffer trigger if PL tweets were generated
+        if "active_pl_tweets" in st.session_state and st.session_state["active_pl_tweets"]:
             with st.container(border=True):
-                st.markdown("### 🐦 Scheduled Tweet Timeline")
-                tweets_timeline = [
-                    ("📢 Sales Detail Announcement", "Immediate / Upon Scanning", announcement_tweet),
-                    ("📝 Registration Opening Notice", pl_r_open, reg_open_tweet),
-                    ("⏰ Registration Closing Notice", pl_r_close, reg_close_tweet),
-                    ("🗳️ Ballots Opening", pl_b_open, ballots_open_tweet),
-                    ("⏰ Ballots Closing", pl_b_close, ballots_close_tweet),
-                    ("✨ Local & YA Ballot Results", pl_b_res, ballots_res_tweet)
-                ]
+                st.markdown("### ⚡ Buffer Automation")
+                
+                if st.button("🚀 Schedule All Tweets Directly into Buffer Queue", type="primary", use_container_width=True, key="buffer_schedule_action_pl"):
+                    progress_bar = st.progress(0)
+                    success_count = 0
+                    active_list = st.session_state["active_pl_tweets"]
 
-                hallmap_url = get_hallmap_link(pl_m_name)
-                for s in edited_pl_sales:
-                    rem_time = get_offset_time(s['open'], hours_before=1)
-                    link_time = get_offset_time(s['open'], hours_before=0.5)
-                    tier_display = "Sale (4+ Only)" if "4+" in s['tier'] else f"{s['tier']} Sale"
-                    rem_tweet = f"""{pl_m_name} (H) - {tier_display} 📢\n\n{tier_display} 🎟️\n• Opens: {s['open']}\n• Click unique links from {link_time}\n\nHallmap link  👇\n{hallmap_url}"""
-                    tweets_timeline.append((f"🎟️ Sale Reminder & Unique Links ({s['tier']})", rem_time, rem_tweet))
+                    # Filter out any Sales Details Announcement tweet
+                    queue_list = [t for t in active_list if "Sales Detail Announcement" not in t[0] and "Sales Details Announcement" not in t[0]]
 
-                for title, post_time, content in tweets_timeline:
+                    for idx, (title, post_time_str, content) in enumerate(queue_list):
+                        dt_target = parse_to_datetime(post_time_str)
+                        if not dt_target or "Immediate" in post_time_str:
+                            dt_target = datetime.now() + timedelta(minutes=2)
+
+                        ok, msg = schedule_to_buffer(content, dt_target)
+                        if ok:
+                            success_count += 1
+                        else:
+                            st.error(f"Failed to queue '{title}': {msg}")
+
+                        progress_bar.progress((idx + 1) / len(queue_list))
+
+                    st.success(f"🎉 Successfully scheduled {success_count}/{len(queue_list)} tweets to your Buffer calendar! (Announcement tweet skipped)")
+
+                st.divider()
+                st.markdown("### 🐦 Preview Scheduled Timeline")
+                for title, post_time, content in st.session_state["active_pl_tweets"]:
                     with st.expander(f"{title} — *Scheduled: {post_time}*"):
                         st.code(content, language="text")
                         x_url = get_x_intent_url(content)
@@ -611,17 +640,20 @@ with tab4:
 
             st.session_state["active_cl_tweets"] = cl_tweets
 
-        # Display timeline and Buffer trigger if tweets were generated
+        # Display timeline and Buffer trigger if CL tweets were generated
         if "active_cl_tweets" in st.session_state and st.session_state["active_cl_tweets"]:
             with st.container(border=True):
                 st.markdown("### ⚡ Buffer Automation")
                 
-                if st.button("🚀 Schedule All Tweets Directly into Buffer Queue", type="primary", use_container_width=True, key="buffer_schedule_action"):
+                if st.button("🚀 Schedule All Tweets Directly into Buffer Queue", type="primary", use_container_width=True, key="buffer_schedule_action_cl"):
                     progress_bar = st.progress(0)
                     success_count = 0
                     active_list = st.session_state["active_cl_tweets"]
 
-                    for idx, (title, post_time_str, content) in enumerate(active_list):
+                    # Filter out any Sales Details Announcement tweet
+                    queue_list = [t for t in active_list if "Sales Detail Announcement" not in t[0] and "Sales Details Announcement" not in t[0]]
+
+                    for idx, (title, post_time_str, content) in enumerate(queue_list):
                         dt_target = parse_to_datetime(post_time_str)
                         if not dt_target or "Immediate" in post_time_str:
                             dt_target = datetime.now() + timedelta(minutes=2)
@@ -632,9 +664,9 @@ with tab4:
                         else:
                             st.error(f"Failed to queue '{title}': {msg}")
 
-                        progress_bar.progress((idx + 1) / len(active_list))
+                        progress_bar.progress((idx + 1) / len(queue_list))
 
-                    st.success(f"🎉 Successfully scheduled {success_count}/{len(active_list)} tweets to your Buffer calendar!")
+                    st.success(f"🎉 Successfully scheduled {success_count}/{len(queue_list)} tweets to your Buffer calendar! (Announcement tweet skipped)")
 
                 st.divider()
                 st.markdown("### 🐦 Preview Scheduled Timeline")
