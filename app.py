@@ -120,6 +120,13 @@ def get_offset_time(date_str, hours_before=1):
     new_dt = dt - timedelta(hours=hours_before)
     return new_dt.strftime("%a %d %b, %I:%M%p").lstrip("0").lower()
 
+def get_results_day_morning(date_str):
+    """Sets scheduled time to 8:30am on the day of the results."""
+    dt = parse_to_datetime(date_str)
+    if not dt: return "TBA"
+    morning_dt = dt.replace(hour=8, minute=30, second=0, microsecond=0)
+    return morning_dt.strftime("%a %d %b, %I:%M%p").lstrip("0").lower()
+
 def check_sale_duration(open_str, close_str):
     dt_open = parse_to_datetime(open_str)
     dt_close = parse_to_datetime(close_str)
@@ -206,7 +213,7 @@ except KeyError:
     st.error("⚠️ GEMINI_API_KEY is missing from Streamlit Secrets. Please add it to your dashboard to continue.")
     st.stop()
 
-for s_key in ["pl_data", "cup_data", "away_data", "cl_away_data", "active_pl_tweets", "active_cl_tweets"]:
+for s_key in ["pl_data", "cup_data", "away_data", "cl_away_data", "active_pl_tweets", "active_cup_tweets", "active_away_tweets", "active_cl_tweets"]:
     if s_key not in st.session_state:
         st.session_state[s_key] = None
 
@@ -324,13 +331,18 @@ with tab1:
             ballots_close_tweet = f"""{pl_m_name} (H) - Ballots 📢\n\nLocal Ballots & YA Ballot 🗳️\n• Opens: Now\n• Closes: Today {ballots_close_time_str}\n\n• Results: {pl_b_res}\n\nhttps://ticketing.liverpoolfc.com/tickets/ballots"""
             ballots_res_tweet = f"""{pl_m_name} (H) - Local & YA Ballots 📢\n\nLocal & YA Ballot Results 🗳️\n• Results today\n• Ensure you have funds in your bank \n\nComment below if successful 👇"""
 
+            # SCHEDULE TIMINGS IMPLEMENTATION
+            reg_close_scheduled = get_offset_time(pl_r_close, hours_before=1)
+            ballots_close_scheduled = get_offset_time(pl_b_close, hours_before=1)
+            ballots_res_scheduled = get_results_day_morning(pl_b_res)
+
             tweets_timeline = [
                 ("📢 Sales Detail Announcement", "Immediate / Upon Scanning", announcement_tweet),
                 ("📝 Registration Opening Notice", pl_r_open, reg_open_tweet),
-                ("⏰ Registration Closing Notice", pl_r_close, reg_close_tweet),
+                ("⏰ Registration Closing Reminder", reg_close_scheduled, reg_close_tweet),
                 ("🗳️ Ballots Opening", pl_b_open, ballots_open_tweet),
-                ("⏰ Ballots Closing", pl_b_close, ballots_close_tweet),
-                ("✨ Local & YA Ballot Results", pl_b_res, ballots_res_tweet)
+                ("⏰ Ballots Closing Reminder", ballots_close_scheduled, ballots_close_tweet),
+                ("✨ Local & YA Ballot Results", ballots_res_scheduled, ballots_res_tweet)
             ]
 
             hallmap_url = get_hallmap_link(pl_m_name)
@@ -343,17 +355,15 @@ with tab1:
 
             st.session_state["active_pl_tweets"] = tweets_timeline
 
-        # Display timeline and Buffer trigger if PL tweets were generated
         if "active_pl_tweets" in st.session_state and st.session_state["active_pl_tweets"]:
             with st.container(border=True):
                 st.markdown("### ⚡ Buffer Automation")
                 
-                if st.button("🚀 Schedule All Tweets Directly into Buffer Queue", type="primary", use_container_width=True, key="buffer_schedule_action_pl"):
+                if st.button("🚀 Schedule All Reminders to Buffer Queue", type="primary", use_container_width=True, key="buffer_schedule_action_pl"):
                     progress_bar = st.progress(0)
                     success_count = 0
                     active_list = st.session_state["active_pl_tweets"]
 
-                    # Filter out any Sales Details Announcement tweet
                     queue_list = [t for t in active_list if "Sales Detail Announcement" not in t[0] and "Sales Details Announcement" not in t[0]]
 
                     for idx, (title, post_time_str, content) in enumerate(queue_list):
@@ -369,7 +379,7 @@ with tab1:
 
                         progress_bar.progress((idx + 1) / len(queue_list))
 
-                    st.success(f"🎉 Successfully scheduled {success_count}/{len(queue_list)} tweets to your Buffer calendar! (Announcement tweet skipped)")
+                    st.success(f"🎉 Successfully scheduled {success_count}/{len(queue_list)} reminders to your Buffer queue! (Announcement post excluded)")
 
                 st.divider()
                 st.markdown("### 🐦 Preview Scheduled Timeline")
@@ -430,7 +440,93 @@ with tab2:
         st.write("")
         st.subheader("⚙️ Refine Details")
         cd = st.session_state.cup_data
-        cup_m_name = st.text_input("Opponent Team Name", value=cd.get("match_name", ""), key="cup_m_name")
+        
+        with st.container(border=True):
+            cup_m_name = st.text_input("Opponent Team Name", value=cd.get("match_name", ""), key="cup_m_name")
+        
+        with st.container(border=True):
+            st.markdown("#### 🎟️ Tiered Sales")
+            edited_sales = []
+            for i, sale in enumerate(cd.get("sales", [])):
+                with st.expander(f"Sale Tier {i+1} ({sale.get('tier', 'Unknown')})", expanded=True):
+                    t_name = st.text_input(f"Criteria", value=sale.get("tier", ""), key=f"tier_name_{i}")
+                    t_open = editable_date_row("Opens", sale.get("open", ""), f"tier_open_{i}")
+                    t_close = editable_date_row("Closes", sale.get("close", ""), f"tier_close_{i}")
+                    edited_sales.append({"tier": t_name, "open": t_open, "close": t_close})
+
+        with st.container(border=True):
+            st.markdown("#### 🗳️ Local Ballot (No YA for Cup)")
+            cup_b_open = editable_date_row("Local Ballot Opens", cd.get("ballot_open", ""), "cup_b_open")
+            cup_b_close = editable_date_row("Local Ballot Closes", cd.get("ballot_close", ""), "cup_b_close")
+            cup_b_res = editable_date_row("Local Ballot Results", cd.get("ballot_results", "TBA"), "cup_b_res")
+
+        with st.container(border=True):
+            st.markdown("#### 💰 Auto Cup Scheme & Match Details")
+            cup_acs_start = editable_date_row("ACS Payment Start", cd.get("acs_start", ""), "cup_acs_start")
+            cup_acs_end = editable_date_row("ACS Payment End", cd.get("acs_end", ""), "cup_acs_end")
+            cup_m_date = editable_date_row("Match Date & Time", cd.get("match_date", ""), "cup_m_date")
+
+        st.write("")
+        if st.button("Generate Cup Tweet Timelines & Calendars 🚀", type="primary", use_container_width=True, key="cup_gen"):
+            sales_formatted_text = ""
+            for s in edited_sales:
+                sales_formatted_text += f"Sale ({s['tier']})\n• Opens: {s['open']}\n• Closes: {s['close']}\n\n"
+
+            announcement_tweet = f"""{cup_m_name} (H) - Sale Details 📢\n\n{sales_formatted_text}Local Ballot 🗳️\n• Opens: {cup_b_open}\n• Closes: {cup_b_close}\n• Results: {cup_b_res}\n\nACS Payment Run 💰\n• {cup_acs_start} - {cup_acs_end}\n\nMatch Date • {cup_m_date} 🏟️"""
+            ballots_res_tweet = f"""{cup_m_name} (H) - Local Ballots 📢\n\nLocal Ballot Results 🗳️\n• Results today\n• Ensure you have funds in your bank \n\nComment below if successful 👇"""
+
+            cup_ballots_res_scheduled = get_results_day_morning(cup_b_res)
+
+            cup_tweets_timeline = [
+                ("📢 Cup Sales Announcement", "Immediate / Upon Scanning", announcement_tweet),
+                ("🗳️ Local Ballot Opening", cup_b_open, f"""{cup_m_name} (H) - Local Ballot 📢\n\nLocal Ballot 🗳️\n• Opens: Now\n• Closes: {cup_b_close}\n\nhttps://ticketing.liverpoolfc.com/tickets/ballots"""),
+                ("⏰ Local Ballot Closing Reminder", get_offset_time(cup_b_close, hours_before=1), f"""{cup_m_name} (H) - Local Ballot 📢\n\nLocal Ballot 🗳️\n• Opens: Now\n• Closes: Today {cup_b_close.split(', ')[-1] if ',' in cup_b_close else cup_b_close}\n\nhttps://ticketing.liverpoolfc.com/tickets/ballots"""),
+                ("🗳️ Local Ballot Results", cup_ballots_res_scheduled, ballots_res_tweet)
+            ]
+
+            for s in edited_sales:
+                opening_tweet = f"""{cup_m_name} (League Cup)  🎟️\n\nSale ({s['tier']})\n• Opens: {s['open']}\n• Closes: {s['close']}\n\nNo registration needed, pre-queue starts 30 minutes before."""
+                cup_tweets_timeline.append((f"🎟️ Sale Reminder ({s['tier']})", get_offset_time(s['open'], hours_before=1), opening_tweet))
+                
+                if check_sale_duration(s['open'], s['close']):
+                    closing_tweet = f"""{cup_m_name} (H) 🎟️\n\nSale ({s['tier']})\n• Opens: {s['open']}\n• Closes: {s['close']}"""
+                    cup_tweets_timeline.append((f"⏰ Sale Closing Reminder ({s['tier']})", get_offset_time(s['close'], hours_before=1), closing_tweet))
+
+            st.session_state["active_cup_tweets"] = cup_tweets_timeline
+
+        if "active_cup_tweets" in st.session_state and st.session_state["active_cup_tweets"]:
+            with st.container(border=True):
+                st.markdown("### ⚡ Buffer Automation")
+                
+                if st.button("🚀 Schedule All Reminders to Buffer Queue", type="primary", use_container_width=True, key="buffer_schedule_action_cup"):
+                    progress_bar = st.progress(0)
+                    success_count = 0
+                    active_list = st.session_state["active_cup_tweets"]
+
+                    queue_list = [t for t in active_list if "Sales Announcement" not in t[0] and "Sales Detail Announcement" not in t[0]]
+
+                    for idx, (title, post_time_str, content) in enumerate(queue_list):
+                        dt_target = parse_to_datetime(post_time_str)
+                        if not dt_target or "Immediate" in post_time_str:
+                            dt_target = datetime.now() + timedelta(minutes=2)
+
+                        ok, msg = schedule_to_buffer(content, dt_target)
+                        if ok:
+                            success_count += 1
+                        else:
+                            st.error(f"Failed to queue '{title}': {msg}")
+
+                        progress_bar.progress((idx + 1) / len(queue_list))
+
+                    st.success(f"🎉 Successfully scheduled {success_count}/{len(queue_list)} reminders to your Buffer queue! (Announcement post excluded)")
+
+                st.divider()
+                st.markdown("### 🐦 Preview Scheduled Timeline")
+                for title, post_time, content in st.session_state["active_cup_tweets"]:
+                    with st.expander(f"{title} — *Scheduled: {post_time}*"):
+                        st.code(content, language="text")
+                        x_url = get_x_intent_url(content)
+                        st.link_button(f"🌐 Post on X via Browser ({title})", x_url, use_container_width=True)
 
 
 # ==========================================
@@ -502,18 +598,58 @@ with tab3:
 
         st.write("")
         if st.button("Generate Away Tweet Timelines & Calendars 🚀", type="primary", use_container_width=True, key="away_gen"):
+            announcement_blocks = []
+            for s in edited_away_sales:
+                announcement_blocks.append(f"Sale ({s['tier']})\n• Opens: {s['open']}\n• Closes: {s['close']}")
+            sales_blocks_text = "\n\n".join(announcement_blocks)
+
+            announcement_tweet = f"""{away_m_name} (A) - Sale Details 📢\n\n{sales_blocks_text}\n\nMatch Date • {away_m_date} 🏟️"""
+
+            away_tweets = [
+                ("📢 Sales Detail Announcement", "Immediate / Upon Scanning", announcement_tweet)
+            ]
+
+            for s in edited_away_sales:
+                sale_tweet = f"""{away_m_name} (A) 🎟️\n\nSale ({s['tier']})\n• Opens: {s['open']}\n• Closes: {s['close']}\n• Guaranteed Sale"""
+                # Schedule reminder 1 hour before start time
+                away_tweets.append((f"🎟️ Sale Reminder ({s['tier']})", get_offset_time(s['open'], hours_before=1), sale_tweet))
+
+            if away_fwd != "TBA":
+                fwd_tweet = f"""Forwarding Deadline ➡️\n• Closes: {away_fwd}"""
+                # Schedule forwarding deadline 1 hour before deadline
+                away_tweets.append(("➡️ Forwarding Deadline Reminder", get_offset_time(away_fwd, hours_before=1), fwd_tweet))
+
+            st.session_state["active_away_tweets"] = away_tweets
+
+        if "active_away_tweets" in st.session_state and st.session_state["active_away_tweets"]:
             with st.container(border=True):
-                st.markdown("### 🐦 Scheduled Away Tweet Timeline")
-                away_tweets = []
-                for s in edited_away_sales:
-                    sale_tweet = f"""{away_m_name} (A) 🎟️\n\nSale ({s['tier']})\n• Opens: {s['open']}\n• Closes: {s['close']}\n• Guaranteed Sale"""
-                    away_tweets.append((f"🎟️ Sale ({s['tier']})", s['open'], sale_tweet))
+                st.markdown("### ⚡ Buffer Automation")
+                
+                if st.button("🚀 Schedule All Reminders to Buffer Queue", type="primary", use_container_width=True, key="buffer_schedule_action_away"):
+                    progress_bar = st.progress(0)
+                    success_count = 0
+                    active_list = st.session_state["active_away_tweets"]
 
-                if away_fwd != "TBA":
-                    fwd_tweet = f"""Forwarding Deadline ➡️\n• Closes: {away_fwd}"""
-                    away_tweets.append(("➡️ Forwarding Deadline", away_fwd, fwd_tweet))
+                    queue_list = [t for t in active_list if "Sales Detail Announcement" not in t[0] and "Sales Details Announcement" not in t[0]]
 
-                for title, post_time, content in away_tweets:
+                    for idx, (title, post_time_str, content) in enumerate(queue_list):
+                        dt_target = parse_to_datetime(post_time_str)
+                        if not dt_target or "Immediate" in post_time_str:
+                            dt_target = datetime.now() + timedelta(minutes=2)
+
+                        ok, msg = schedule_to_buffer(content, dt_target)
+                        if ok:
+                            success_count += 1
+                        else:
+                            st.error(f"Failed to queue '{title}': {msg}")
+
+                        progress_bar.progress((idx + 1) / len(queue_list))
+
+                    st.success(f"🎉 Successfully scheduled {success_count}/{len(queue_list)} reminders to your Buffer queue! (Announcement post excluded)")
+
+                st.divider()
+                st.markdown("### 🐦 Preview Scheduled Timeline")
+                for title, post_time, content in st.session_state["active_away_tweets"]:
                     with st.expander(f"{title} — *Scheduled: {post_time}*"):
                         st.code(content, language="text")
                         x_url = get_x_intent_url(content)
@@ -625,7 +761,7 @@ with tab4:
                 ("📢 CL Away Sales Details Announcement", "Immediate / Upon Scanning", cl_announcement_tweet)
             ]
 
-            # 2. INDIVIDUAL TIER SALE TWEETS
+            # 2. INDIVIDUAL TIER SALE REMINDER TWEETS
             for s in edited_cl_sales:
                 open_time_part = s['open'].split(', ')[-1] if ', ' in s['open'] else s['open']
                 
@@ -636,21 +772,21 @@ with tab4:
                 fwd_deadline_text = s['forwarding_deadline'].replace(',', ' -') if ',' in s['forwarding_deadline'] else s['forwarding_deadline']
 
                 sale_tweet = f"""{cl_m_name} (A) 🎟️\n\nSale ({s['tier']})\n• Opens: Today - {open_time_part}\n• Closes: {s['close'].replace(',', ' -')}\n{info_line}\nForwarding Deadline ➡️\n• Closes: {fwd_deadline_text}"""
-                cl_tweets.append((f"🎟️ Sale ({s['tier']})", s['open'], sale_tweet))
+                
+                # Reminder 1 hour before start time
+                cl_tweets.append((f"🎟️ Sale Reminder ({s['tier']})", get_offset_time(s['open'], hours_before=1), sale_tweet))
 
             st.session_state["active_cl_tweets"] = cl_tweets
 
-        # Display timeline and Buffer trigger if CL tweets were generated
         if "active_cl_tweets" in st.session_state and st.session_state["active_cl_tweets"]:
             with st.container(border=True):
                 st.markdown("### ⚡ Buffer Automation")
                 
-                if st.button("🚀 Schedule All Tweets Directly into Buffer Queue", type="primary", use_container_width=True, key="buffer_schedule_action_cl"):
+                if st.button("🚀 Schedule All Reminders to Buffer Queue", type="primary", use_container_width=True, key="buffer_schedule_action_cl"):
                     progress_bar = st.progress(0)
                     success_count = 0
                     active_list = st.session_state["active_cl_tweets"]
 
-                    # Filter out any Sales Details Announcement tweet
                     queue_list = [t for t in active_list if "Sales Detail Announcement" not in t[0] and "Sales Details Announcement" not in t[0]]
 
                     for idx, (title, post_time_str, content) in enumerate(queue_list):
@@ -666,7 +802,7 @@ with tab4:
 
                         progress_bar.progress((idx + 1) / len(queue_list))
 
-                    st.success(f"🎉 Successfully scheduled {success_count}/{len(queue_list)} tweets to your Buffer calendar! (Announcement tweet skipped)")
+                    st.success(f"🎉 Successfully scheduled {success_count}/{len(queue_list)} reminders to your Buffer queue! (Announcement post excluded)")
 
                 st.divider()
                 st.markdown("### 🐦 Preview Scheduled Timeline")
