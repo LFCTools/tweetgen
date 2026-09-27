@@ -67,35 +67,67 @@ def schedule_to_buffer(text, scheduled_at_dt):
         return False, str(e)
 
 
-# --- HELPER FUNCTIONS FOR CALENDAR & TIME ---
+# --- ROBUST REGEX-BASED DATETIME PARSER ---
 def parse_to_datetime(date_str):
-    if not date_str or date_str == "TBA" or "[" in date_str:
+    if not date_str or str(date_str).strip().upper() == "TBA" or "[" in str(date_str):
         return None
     try:
-        clean_str = date_str.replace(',', '').replace('-', ' ').strip()
-        parts = clean_str.split() 
-        if len(parts) < 3: return None
-            
-        day = int(parts[1])
-        month_str = parts[2][:3]
-        month_num = datetime.strptime(month_str, '%b').month
-        
+        s = str(date_str).replace(',', ' ').replace('-', ' ').strip()
+        s = re.sub(r'(\d{1,2})\.(\d{2})', r'\1:\2', s)
+        s = re.sub(r'(\d+)(st|nd|rd|th)', r'\1', s, flags=re.IGNORECASE)
+
+        months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
+        month_num = None
+        for idx, m in enumerate(months, 1):
+            if re.search(r'\b' + m, s, re.IGNORECASE):
+                month_num = idx
+                break
+
+        if not month_num:
+            return None
+
+        time_match = re.search(r'(\d{1,2}:\d{2}\s*(?:am|pm)?|\d{1,2}\s*(?:am|pm))', s, re.IGNORECASE)
+        time_str = time_match.group(0).strip().lower() if time_match else None
+        s_without_time = s.replace(time_match.group(0), ' ') if time_match else s
+
+        year_match = re.search(r'\b(202[4-9]|203[0-9])\b', s_without_time)
         today = datetime.today()
-        current_year = today.year
-        if today.month >= 7 and month_num < 7:
-            calc_year = current_year + 1
-        elif today.month < 7 and month_num >= 7:
-            calc_year = current_year - 1
+        if year_match:
+            year = int(year_match.group(1))
+            s_without_time = s_without_time.replace(year_match.group(0), ' ')
         else:
-            calc_year = current_year
-        
-        if len(parts) < 4:
-            dt_str = f"{day} {month_str} {calc_year} 09:00am"
-        else:
-            time_str = parts[3].lower()
-            dt_str = f"{day} {month_str} {calc_year} {time_str}"
-            
-        return datetime.strptime(dt_str, "%d %b %Y %I:%M%p" if ":" in dt_str.split()[-1] else "%d %b %Y %I%p")
+            if today.month >= 7 and month_num < 7:
+                year = today.year + 1
+            elif today.month < 7 and month_num >= 7:
+                year = today.year - 1
+            else:
+                year = today.year
+
+        day_match = re.search(r'\b([1-9]|[12]\d|3[01])\b', s_without_time)
+        if not day_match:
+            return None
+        day = int(day_match.group(1))
+
+        hour = 9
+        minute = 0
+        if time_str:
+            is_pm = 'pm' in time_str
+            is_am = 'am' in time_str
+            clean_t = time_str.replace('am', '').replace('pm', '').strip()
+            if ':' in clean_t:
+                h, m = clean_t.split(':')
+                hour = int(h)
+                minute = int(m)
+            else:
+                hour = int(clean_t)
+                minute = 0
+
+            if is_pm and hour < 12:
+                hour += 12
+            elif is_am and hour == 12:
+                hour = 0
+
+        return datetime(year, month_num, day, hour, minute)
     except Exception:
         return None
 
@@ -157,19 +189,20 @@ def get_hallmap_link(opponent_name):
         "afc bournemouth": "https://ticketing.liverpoolfc.com/en-GB/events/liverpool%20v%20afc%20bournemouth/2027-5-30_15.00/anfield?hallmap",
         "bournemouth": "https://ticketing.liverpoolfc.com/en-GB/events/liverpool%20v%20afc%20bournemouth/2027-5-30_15.00/anfield?hallmap"
     }
-    key = opponent_name.strip().lower()
-    return hallmap_mapping.get(key, "https://ticketing.liverpoolfc.com/")
+    return hallmap_mapping.get(opponent_name.strip().lower(), "https://ticketing.liverpoolfc.com/")
 
-# --- MOBILE-OPTIMIZED UI WIDGET ---
+# --- FIXED MOBILE-OPTIMIZED UI WIDGET ---
 def editable_date_row(label, default_val, key):
-    if f"{key}_default" not in st.session_state or st.session_state[f"{key}_default"] != default_val:
-        st.session_state[f"{key}_default"] = default_val
-        dt_obj = parse_to_datetime(default_val)
+    raw_val = str(default_val).strip() if default_val else "TBA"
+
+    if f"{key}_default" not in st.session_state or st.session_state[f"{key}_default"] != raw_val:
+        st.session_state[f"{key}_default"] = raw_val
+        dt_obj = parse_to_datetime(raw_val)
         
-        st.session_state[f"{key}_tba"] = not bool(dt_obj) or default_val == "TBA"
-        st.session_state[f"{key}_allday"] = bool(default_val and default_val != "TBA" and not any(m in default_val.lower() for m in ['am','pm',':']))
+        st.session_state[f"{key}_tba"] = (raw_val.upper() == "TBA" or not raw_val)
+        st.session_state[f"{key}_allday"] = bool(raw_val and raw_val.upper() != "TBA" and not any(m in raw_val.lower() for m in ['am','pm',':']))
         st.session_state[f"{key}_date"] = dt_obj.date() if dt_obj else datetime.today().date()
-        st.session_state[f"{key}_time"] = dt_obj.time() if dt_obj else datetime.strptime("10:00am", "%I:%M%p").time()
+        st.session_state[f"{key}_time"] = dt_obj.time() if dt_obj else datetime.strptime("09:00am", "%I:%M%p").time()
 
     is_tba = st.session_state[f"{key}_tba"]
     all_day = st.session_state[f"{key}_allday"]
@@ -181,8 +214,12 @@ def editable_date_row(label, default_val, key):
     elif all_day:
         display_val = d.strftime("%a %d %b")
     else:
-        time_formatted = t.strftime("%I:%M%p").lstrip("0").lower()
-        display_val = f"{d.strftime('%a %d %b')}, {time_formatted}"
+        dt_obj = parse_to_datetime(raw_val)
+        if dt_obj:
+            time_formatted = dt_obj.strftime("%I:%M%p").lstrip("0").lower()
+            display_val = f"{dt_obj.strftime('%a %d %b')}, {time_formatted}"
+        else:
+            display_val = raw_val
 
     edit_mode = st.toggle(f"✏️ **{label}** : {display_val}", key=f"toggle_{key}")
     
@@ -250,15 +287,10 @@ with tab1:
                         progress_bar.progress(attempt / max_attempts)
 
                         prompt = f"""
-                        Analyze the following raw text from an LFC Premier League ticket page.
-                        CRITICAL INSTRUCTIONS:
-                        - 'match_name': Extract only the opponent team name.
-                        - 'reg_open' & 'reg_close': Search specifically for registration periods for All Members / Season Ticket Holders.
-                        - 'links_sent': Look inside ticket sale / details sections for sentences mentioning 'unique link' or 'sent a link on...'.
-                        - 'sales': Extract all sale tiers (open and close times).
-                        - 'ballot_open', 'ballot_close', 'ballot_results': Search for Local General Ballot, Local Additional, and Young Adults Ballot sections.
-                        
-                        DO NOT return 'TBA' if the date or time exists anywhere in the text.
+                        Analyze this raw text from an LFC Premier League ticket page.
+                        Extract opponent name, unified registration details, local & YA ballot open/close/results dates, and ticket sale opening dates per tier.
+                        CRITICAL: Look inside ticket sale details for sentences mentioning 'unique link' to get 'links_sent'.
+                        DO NOT return 'TBA' if the date exists anywhere in the text.
                         
                         Desired JSON Format:
                         {{
@@ -353,7 +385,6 @@ with tab1:
                 sales_text_announcement += f"• {tier_label}: {s['open']}\n"
 
             announcement_tweet = f"""{pl_m_name} (H) - Sale Details 📢\n\nRegistration (All Members) 📝\n• Opens: {pl_r_open}\n• Closes: {pl_r_close}\n• Sale links sent: {pl_l_sent}\n\nSales 🎟️\n{sales_text_announcement}\nLocal & YA Ballots 🗳️\n• Opens: {pl_b_open}\n• Closes: {pl_b_close}\n• Results: {pl_b_res}\n\nMatch Date • {pl_m_date} 🏟️"""
-
             reg_open_tweet = f"""{pl_m_name} (H) - Registration 📢\n\nRegistration (All Members) 📝\n• Opens: Now\n• Closes: {pl_r_close}\n\n• Sale links sent: {pl_l_sent}\n\nSale 🎟️\n• {edited_pl_sales[0]['open'] if edited_pl_sales else 'TBA'}"""
             reg_close_time_str = pl_r_close.split(', ')[-1] if ',' in pl_r_close else pl_r_close
             reg_close_tweet = f"""{pl_m_name} (H) - Registration 📢\n\nRegistration (All Members) 📝\n• Opens: Now\n• Closes: Today {reg_close_time_str}\n\n• Sale links sent: {pl_l_sent}\n\nSale 🎟️\n• {edited_pl_sales[0]['open'] if edited_pl_sales else 'TBA'}"""
@@ -379,8 +410,49 @@ with tab1:
             hallmap_url = get_hallmap_link(pl_m_name)
             for s in edited_pl_sales:
                 rem_time = get_offset_time(s['open'], hours_before=1)
-                link_time = get_offset_t
-                # ==========================================
+                link_time = get_offset_time(s['open'], hours_before=0.5)
+                tier_display = "Sale (4+ Only)" if "4+" in s['tier'] else f"{s['tier']} Sale"
+                rem_tweet = f"""{pl_m_name} (H) - {tier_display} 📢\n\n{tier_display} 🎟️\n• Opens: {s['open']}\n• Click unique links from {link_time}\n\nHallmap link  👇\n{hallmap_url}"""
+                tweets_timeline.append((f"🎟️ Sale Reminder & Unique Links ({s['tier']})", rem_time, rem_tweet))
+
+            st.session_state["active_pl_tweets"] = tweets_timeline
+
+        if "active_pl_tweets" in st.session_state and st.session_state["active_pl_tweets"]:
+            with st.container(border=True):
+                st.markdown("### ⚡ Buffer Automation")
+                
+                if st.button("🚀 Schedule All Reminders to Buffer Queue", type="primary", use_container_width=True, key="buffer_schedule_action_pl"):
+                    progress_bar = st.progress(0)
+                    success_count = 0
+                    active_list = st.session_state["active_pl_tweets"]
+
+                    queue_list = [t for t in active_list if "Sales Detail Announcement" not in t[0] and "Sales Details Announcement" not in t[0]]
+
+                    for idx, (title, post_time_str, content) in enumerate(queue_list):
+                        dt_target = parse_to_datetime(post_time_str)
+                        if not dt_target or "Immediate" in post_time_str:
+                            dt_target = datetime.now() + timedelta(minutes=2)
+
+                        ok, msg = schedule_to_buffer(content, dt_target)
+                        if ok:
+                            success_count += 1
+                        else:
+                            st.error(f"Failed to queue '{title}': {msg}")
+
+                        progress_bar.progress((idx + 1) / len(queue_list))
+
+                    st.success(f"🎉 Successfully scheduled {success_count}/{len(queue_list)} reminders to your Buffer queue! (Announcement post excluded)")
+
+                st.divider()
+                st.markdown("### 🐦 Preview Scheduled Timeline")
+                for title, post_time, content in st.session_state["active_pl_tweets"]:
+                    with st.expander(f"{title} — *Scheduled: {post_time}*"):
+                        st.code(content, language="text")
+                        x_url = get_x_intent_url(content)
+                        st.link_button(f"🌐 Post on X via Browser ({title})", x_url, use_container_width=True)
+
+
+# ==========================================
 # TAB 2: CUP GAMES
 # ==========================================
 with tab2:
@@ -412,13 +484,13 @@ with tab2:
                         progress_bar.progress(attempt / max_attempts)
 
                         prompt = f"""
-                        Analyze the following raw text from an LFC Cup match ticket page.
+                        Analyze this raw text from an LFC Cup match ticket page.
                         Extract opponent name, sales tiers with open/close times, local ballot dates, and ACS dates.
-                        DO NOT return 'TBA' if the date or time exists anywhere in the text.
+                        DO NOT return 'TBA' if the date exists anywhere in the text.
                         
                         Desired JSON Format:
                         {{
-                          "match_name": "Only the opponent team name (e.g., Spurs)",
+                          "match_name": "Spurs",
                           "sales": [
                             {{"tier": "Credit balance of 2", "open": "Day Date, Time", "close": "Day Date, Time"}}
                           ],
@@ -589,13 +661,13 @@ with tab3:
                         progress_bar.progress(attempt / max_attempts)
 
                         prompt = f"""
-                        Analyze the following raw text from an LFC Away match ticket page. Exclude any disabled/wheelchair/ambulant sales. 
-                        Extract opponent name, sales tiers with open/close times, and forwarding deadline if present.
-                        DO NOT return 'TBA' if the date or time exists anywhere in the text.
+                        Analyze this raw text from an LFC Away match ticket page. Exclude disabled/wheelchair sales.
+                        Extract opponent name, sales tiers with open/close times, and forwarding deadline.
+                        DO NOT return 'TBA' if the date exists anywhere in the text.
                         
                         Desired JSON Format:
                         {{
-                          "match_name": "Only the opponent team name (e.g., Lask)",
+                          "match_name": "Lask",
                           "sales": [
                             {{"tier": "9+ Away Credit Balance", "open": "Day Date, Time", "close": "Day Date, Time"}}
                           ],
@@ -751,17 +823,17 @@ with tab4:
                         progress_bar.progress(attempt / max_attempts)
 
                         prompt = f"""
-                        Analyze the following raw text from an LFC Champions League / European Away match ticket page. Exclude any disabled/wheelchair/ambulant sales.
+                        Analyze this raw text from an LFC Champions League / European Away match ticket page. Exclude disabled/wheelchair sales.
                         Extract opponent name, match date, and sales tiers.
                         CRITICAL INSTRUCTIONS:
-                        1. For 'tier', simplify the criteria name to something clean like '9+ Games' or '9+ Away Credit Balance' (e.g., if it says 'European Away Match Credit Balance of 9 or more', make tier '9+ Games').
+                        1. For 'tier', simplify the criteria name to something clean like '9+ Games' or '9+ Away Credit Balance'.
                         2. Look inside EACH sale section for the sentence mentioning 'Forwarding Deadline' and extract its exact date and time into 'forwarding_deadline' for that tier.
                         3. For 'info', extract whether it states 'Guaranteed Sale' (or 'guaranteed'), 'Subject to availability', or leave empty if not stated.
-                        DO NOT return 'TBA' if the date or time exists anywhere in the text.
+                        DO NOT return 'TBA' if the date exists anywhere in the text.
 
                         Desired JSON Format:
                         {{
-                          "match_name": "Only the opponent team name (e.g., LASK)",
+                          "match_name": "LASK",
                           "sales": [
                             {{
                               "tier": "9+ Games",
@@ -835,7 +907,6 @@ with tab4:
                     edited_cl_sales.append({"tier": t_name, "open": t_open, "close": t_close, "info": t_info, "forwarding_deadline": t_fwd})
 
         with st.container(border=True):
-            st.markdown("#### 🏟️ Match Details")
             cl_m_date = editable_date_row("Match Date & Time", cld.get("match_date", ""), "cl_m_date")
 
         st.write("")
@@ -855,7 +926,7 @@ with tab4:
             cl_announcement_tweet = f"""{cl_m_name} (A) - Sale Details 📢\n\n{sales_blocks_text}\n\nMatch Date • {cl_m_date} 🏟️"""
 
             cl_tweets = [
-                ("📢 CL Away Sales Details Announcement", "Immediate / Upon Scanning", cl_announcement_tweet)
+                ("📢 CL Away Sales Details Announcement", "Immediate / Upon Scanning", announcement_tweet)
             ]
 
             for s in edited_cl_sales:
