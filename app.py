@@ -9,10 +9,6 @@ import re
 
 # --- BUFFER GRAPHQL SCHEDULER HELPER ---
 def schedule_to_buffer(text, scheduled_at_dt):
-    """
-    Schedules a post via Buffer GraphQL API.
-    scheduled_at_dt: datetime object representing when the tweet should post.
-    """
     api_key = st.secrets.get("BUFFER_API_KEY")
     channel_id = st.secrets.get("BUFFER_CHANNEL_ID", "6968c64b457dae6a340dd080")
 
@@ -121,7 +117,6 @@ def get_offset_time(date_str, hours_before=1):
     return new_dt.strftime("%a %d %b, %I:%M%p").lstrip("0").lower()
 
 def get_results_day_morning(date_str):
-    """Sets scheduled time to 8:30am on the day of the results."""
     dt = parse_to_datetime(date_str)
     if not dt: return "TBA"
     morning_dt = dt.replace(hour=8, minute=30, second=0, microsecond=0)
@@ -217,12 +212,10 @@ for s_key in ["pl_data", "cup_data", "away_data", "cl_away_data", "active_pl_twe
     if s_key not in st.session_state:
         st.session_state[s_key] = None
 
-# --- MAIN HEADER ---
 st.title("🔴 LFC Ticket Alerts & Tweet Scheduler")
 st.markdown("Automate your custom sale templates, scheduled tweet timelines, and calendar schedules instantly.")
 st.write("")
 
-# --- TABS ---
 tab1, tab2, tab3, tab4 = st.tabs(["🏆 Premier League (Home)", "🏅 Cup Games (Home)", "✈️ League Aways", "🇪🇺 CL Aways"])
 
 # ==========================================
@@ -235,29 +228,41 @@ with tab1:
             if not pl_url:
                 st.error("Please provide the URL.")
             else:
-                with st.spinner("Analyzing ticketing page..."):
-                    try:
-                        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-                        response = requests.get(pl_url, headers=headers, timeout=5)
-                        soup = BeautifulSoup(response.text, 'html.parser')
-                        for script in soup(["script", "style", "nav", "footer", "header"]):
-                            script.extract()
-                        page_text = " ".join(soup.get_text().split())[:20000]
+                status_placeholder = st.empty()
+                progress_bar = st.progress(0)
+                try:
+                    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                    response = requests.get(pl_url, headers=headers, timeout=10)
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    for script in soup(["script", "style", "nav", "footer", "header"]):
+                        script.extract()
+                    page_text = " ".join(soup.get_text().split())[:35000]
 
-                        genai.configure(api_key=api_key)
-                        model = genai.GenerativeModel('gemini-2.5-flash')
-                        
+                    genai.configure(api_key=api_key)
+                    model = genai.GenerativeModel('gemini-2.5-flash')
+
+                    max_attempts = 10
+                    best_data = None
+                    least_tbas = 999
+
+                    for attempt in range(1, max_attempts + 1):
+                        status_placeholder.info(f"⏳ Scanning page details (Attempt {attempt}/{max_attempts})...")
+                        progress_bar.progress(attempt / max_attempts)
+
                         prompt = f"""
-                        Analyze the following raw text from an LFC Premier League ticket page. 
-                        CRITICAL INSTRUCTION FOR 'links_sent': Look inside the 'TICKET SALE' or sale details section for sentences mentioning 'unique link'. Extract that exact date/time.
-                        Extract unified registration details, local & YA ballot open/close/results dates, and ticket sale opening dates per tier (e.g. 4+ Members, All Members).
-                        Respond ONLY with a valid raw JSON object matching these exact keys. 
-                        Use abbreviated days (e.g., Wed) and months (e.g., Nov) and format times like 10:00am or 11:00am.
-                        If any field is missing, make its value "TBA".
+                        Analyze the following raw text from an LFC Premier League ticket page.
+                        CRITICAL INSTRUCTIONS:
+                        - 'match_name': Extract only the opponent team name.
+                        - 'reg_open' & 'reg_close': Search specifically for registration periods for All Members / Season Ticket Holders.
+                        - 'links_sent': Look inside ticket sale / details sections for sentences mentioning 'unique link' or 'sent a link on...'.
+                        - 'sales': Extract all sale tiers (open and close times).
+                        - 'ballot_open', 'ballot_close', 'ballot_results': Search for Local General Ballot, Local Additional, and Young Adults Ballot sections.
+                        
+                        DO NOT return 'TBA' if the date or time exists anywhere in the text.
                         
                         Desired JSON Format:
                         {{
-                          "match_name": "Only the opponent team name (e.g., Fulham)",
+                          "match_name": "Fulham",
                           "reg_open": "Day Date, Time",
                           "reg_close": "Day Date, Time",
                           "links_sent": "Day Date",
@@ -266,17 +271,44 @@ with tab1:
                           ],
                           "ballot_open": "Day Date, Time",
                           "ballot_close": "Day Date, Time",
-                          "ballot_results": "TBA or Day Date",
+                          "ballot_results": "Day Date",
                           "match_date": "Day Date, Time"
                         }}
                         Source Text: {page_text}
                         """
+
                         ai_response = model.generate_content(prompt)
-                        json_text = ai_response.text.strip().replace("```json", "").replace("```", "")
-                        st.session_state.pl_data = json.loads(json_text)
-                        st.toast("✅ Data successfully extracted!")
-                    except Exception as e:
-                        st.error(f"Failed to automatically pull details: {e}")
+                        cleaned_json = ai_response.text.strip().replace("```json", "").replace("```", "").strip()
+                        extracted = json.loads(cleaned_json)
+
+                        tba_count = 0
+                        core_fields = ["reg_open", "reg_close", "links_sent", "ballot_open", "ballot_close", "ballot_results", "match_date"]
+                        for field in core_fields:
+                            val = str(extracted.get(field, "TBA")).upper()
+                            if "TBA" in val or not val.strip():
+                                tba_count += 1
+                        
+                        sales = extracted.get("sales", [])
+                        if not sales or any("TBA" in str(s.get("open", "TBA")).upper() for s in sales):
+                            tba_count += 1
+
+                        if tba_count < least_tbas:
+                            least_tbas = tba_count
+                            best_data = extracted
+
+                        if tba_count == 0:
+                            status_placeholder.success(f"✅ All fields identified on attempt {attempt}!")
+                            break
+
+                    st.session_state.pl_data = best_data
+                    progress_bar.empty()
+                    if least_tbas == 0:
+                        st.toast("✅ All fields extracted with 0 TBAs!")
+                    else:
+                        status_placeholder.warning(f"Extracted best match ({least_tbas} unlisted/TBA fields after {max_attempts} attempts).")
+
+                except Exception as e:
+                    st.error(f"Failed to pull details: {e}")
 
     if st.session_state.pl_data:
         st.write("")
@@ -331,7 +363,6 @@ with tab1:
             ballots_close_tweet = f"""{pl_m_name} (H) - Ballots 📢\n\nLocal Ballots & YA Ballot 🗳️\n• Opens: Now\n• Closes: Today {ballots_close_time_str}\n\n• Results: {pl_b_res}\n\nhttps://ticketing.liverpoolfc.com/tickets/ballots"""
             ballots_res_tweet = f"""{pl_m_name} (H) - Local & YA Ballots 📢\n\nLocal & YA Ballot Results 🗳️\n• Results today\n• Ensure you have funds in your bank \n\nComment below if successful 👇"""
 
-            # SCHEDULE TIMINGS IMPLEMENTATION
             reg_close_scheduled = get_offset_time(pl_r_close, hours_before=1)
             ballots_close_scheduled = get_offset_time(pl_b_close, hours_before=1)
             ballots_res_scheduled = get_results_day_morning(pl_b_res)
@@ -348,49 +379,8 @@ with tab1:
             hallmap_url = get_hallmap_link(pl_m_name)
             for s in edited_pl_sales:
                 rem_time = get_offset_time(s['open'], hours_before=1)
-                link_time = get_offset_time(s['open'], hours_before=0.5)
-                tier_display = "Sale (4+ Only)" if "4+" in s['tier'] else f"{s['tier']} Sale"
-                rem_tweet = f"""{pl_m_name} (H) - {tier_display} 📢\n\n{tier_display} 🎟️\n• Opens: {s['open']}\n• Click unique links from {link_time}\n\nHallmap link  👇\n{hallmap_url}"""
-                tweets_timeline.append((f"🎟️ Sale Reminder & Unique Links ({s['tier']})", rem_time, rem_tweet))
-
-            st.session_state["active_pl_tweets"] = tweets_timeline
-
-        if "active_pl_tweets" in st.session_state and st.session_state["active_pl_tweets"]:
-            with st.container(border=True):
-                st.markdown("### ⚡ Buffer Automation")
-                
-                if st.button("🚀 Schedule All Reminders to Buffer Queue", type="primary", use_container_width=True, key="buffer_schedule_action_pl"):
-                    progress_bar = st.progress(0)
-                    success_count = 0
-                    active_list = st.session_state["active_pl_tweets"]
-
-                    queue_list = [t for t in active_list if "Sales Detail Announcement" not in t[0] and "Sales Details Announcement" not in t[0]]
-
-                    for idx, (title, post_time_str, content) in enumerate(queue_list):
-                        dt_target = parse_to_datetime(post_time_str)
-                        if not dt_target or "Immediate" in post_time_str:
-                            dt_target = datetime.now() + timedelta(minutes=2)
-
-                        ok, msg = schedule_to_buffer(content, dt_target)
-                        if ok:
-                            success_count += 1
-                        else:
-                            st.error(f"Failed to queue '{title}': {msg}")
-
-                        progress_bar.progress((idx + 1) / len(queue_list))
-
-                    st.success(f"🎉 Successfully scheduled {success_count}/{len(queue_list)} reminders to your Buffer queue! (Announcement post excluded)")
-
-                st.divider()
-                st.markdown("### 🐦 Preview Scheduled Timeline")
-                for title, post_time, content in st.session_state["active_pl_tweets"]:
-                    with st.expander(f"{title} — *Scheduled: {post_time}*"):
-                        st.code(content, language="text")
-                        x_url = get_x_intent_url(content)
-                        st.link_button(f"🌐 Post on X via Browser ({title})", x_url, use_container_width=True)
-
-
-# ==========================================
+                link_time = get_offset_t
+                # ==========================================
 # TAB 2: CUP GAMES
 # ==========================================
 with tab2:
@@ -400,20 +390,32 @@ with tab2:
             if not cup_url:
                 st.error("Please provide the URL.")
             else:
-                with st.spinner("Analyzing Cup ticketing page..."):
-                    try:
-                        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-                        response = requests.get(cup_url, headers=headers, timeout=5)
-                        soup = BeautifulSoup(response.text, 'html.parser')
-                        for script in soup(["script", "style", "nav", "footer", "header"]):
-                            script.extract()
-                        page_text = " ".join(soup.get_text().split())[:20000] 
+                status_placeholder = st.empty()
+                progress_bar = st.progress(0)
+                try:
+                    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                    response = requests.get(cup_url, headers=headers, timeout=10)
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    for script in soup(["script", "style", "nav", "footer", "header"]):
+                        script.extract()
+                    page_text = " ".join(soup.get_text().split())[:35000] 
 
-                        genai.configure(api_key=api_key)
-                        model = genai.GenerativeModel('gemini-2.5-flash')
+                    genai.configure(api_key=api_key)
+                    model = genai.GenerativeModel('gemini-2.5-flash')
+                    
+                    max_attempts = 10
+                    best_data = None
+                    least_tbas = 999
+
+                    for attempt in range(1, max_attempts + 1):
+                        status_placeholder.info(f"⏳ Scanning Cup details (Attempt {attempt}/{max_attempts})...")
+                        progress_bar.progress(attempt / max_attempts)
+
                         prompt = f"""
-                        Analyze the following raw text from an LFC Cup match ticket page. Extract opponent name, sales tiers with open/close times, local ballot dates, and ACS dates.
-                        Respond ONLY with a valid raw JSON object.
+                        Analyze the following raw text from an LFC Cup match ticket page.
+                        Extract opponent name, sales tiers with open/close times, local ballot dates, and ACS dates.
+                        DO NOT return 'TBA' if the date or time exists anywhere in the text.
+                        
                         Desired JSON Format:
                         {{
                           "match_name": "Only the opponent team name (e.g., Spurs)",
@@ -422,7 +424,7 @@ with tab2:
                           ],
                           "ballot_open": "Day Date, Time",
                           "ballot_close": "Day Date, Time",
-                          "ballot_results": "TBA or Day Date",
+                          "ballot_results": "Day Date",
                           "acs_start": "Day Date",
                           "acs_end": "Day Date",
                           "match_date": "Day Date, Time"
@@ -430,11 +432,37 @@ with tab2:
                         Source Text: {page_text}
                         """
                         ai_response = model.generate_content(prompt)
-                        json_text = ai_response.text.strip().replace("```json", "").replace("```", "")
-                        st.session_state.cup_data = json.loads(json_text)
-                        st.toast("✅ Cup data successfully extracted!")
-                    except Exception as e:
-                        st.error(f"Failed to automatically pull details: {e}")
+                        cleaned_json = ai_response.text.strip().replace("```json", "").replace("```", "").strip()
+                        extracted = json.loads(cleaned_json)
+
+                        tba_count = 0
+                        core_fields = ["match_name", "ballot_open", "ballot_close", "ballot_results", "acs_start", "acs_end", "match_date"]
+                        for field in core_fields:
+                            val = str(extracted.get(field, "TBA")).upper()
+                            if "TBA" in val or not val.strip():
+                                tba_count += 1
+                        
+                        sales = extracted.get("sales", [])
+                        if not sales or any("TBA" in str(s.get("open", "TBA")).upper() for s in sales):
+                            tba_count += 1
+
+                        if tba_count < least_tbas:
+                            least_tbas = tba_count
+                            best_data = extracted
+
+                        if tba_count == 0:
+                            status_placeholder.success(f"✅ All fields identified on attempt {attempt}!")
+                            break
+
+                    st.session_state.cup_data = best_data
+                    progress_bar.empty()
+                    if least_tbas == 0:
+                        st.toast("✅ Cup data successfully extracted with 0 TBAs!")
+                    else:
+                        status_placeholder.warning(f"Extracted best match ({least_tbas} unlisted/TBA fields after {max_attempts} attempts).")
+
+                except Exception as e:
+                    st.error(f"Failed to automatically pull details: {e}")
 
     if st.session_state.cup_data:
         st.write("")
@@ -539,22 +567,32 @@ with tab3:
             if not away_url:
                 st.error("Please provide the URL.")
             else:
-                with st.spinner("Analyzing Away ticketing page..."):
-                    try:
-                        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-                        response = requests.get(away_url, headers=headers, timeout=5)
-                        soup = BeautifulSoup(response.text, 'html.parser')
-                        for script in soup(["script", "style", "nav", "footer", "header"]):
-                            script.extract()
-                            
-                        page_text = " ".join(soup.get_text().split())[:20000] 
+                status_placeholder = st.empty()
+                progress_bar = st.progress(0)
+                try:
+                    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                    response = requests.get(away_url, headers=headers, timeout=10)
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    for script in soup(["script", "style", "nav", "footer", "header"]):
+                        script.extract()
+                    page_text = " ".join(soup.get_text().split())[:35000] 
 
-                        genai.configure(api_key=api_key)
-                        model = genai.GenerativeModel('gemini-2.5-flash')
+                    genai.configure(api_key=api_key)
+                    model = genai.GenerativeModel('gemini-2.5-flash')
+
+                    max_attempts = 10
+                    best_data = None
+                    least_tbas = 999
+
+                    for attempt in range(1, max_attempts + 1):
+                        status_placeholder.info(f"⏳ Scanning Away details (Attempt {attempt}/{max_attempts})...")
+                        progress_bar.progress(attempt / max_attempts)
+
                         prompt = f"""
                         Analyze the following raw text from an LFC Away match ticket page. Exclude any disabled/wheelchair/ambulant sales. 
                         Extract opponent name, sales tiers with open/close times, and forwarding deadline if present.
-                        Respond ONLY with a valid raw JSON object.
+                        DO NOT return 'TBA' if the date or time exists anywhere in the text.
+                        
                         Desired JSON Format:
                         {{
                           "match_name": "Only the opponent team name (e.g., Lask)",
@@ -567,11 +605,37 @@ with tab3:
                         Source Text: {page_text}
                         """
                         ai_response = model.generate_content(prompt)
-                        json_text = ai_response.text.strip().replace("```json", "").replace("```", "")
-                        st.session_state.away_data = json.loads(json_text)
-                        st.toast("✅ Away data successfully extracted!")
-                    except Exception as e:
-                        st.error(f"Failed to automatically pull details: {e}")
+                        cleaned_json = ai_response.text.strip().replace("```json", "").replace("```", "").strip()
+                        extracted = json.loads(cleaned_json)
+
+                        tba_count = 0
+                        core_fields = ["match_name", "forwarding_deadline", "match_date"]
+                        for field in core_fields:
+                            val = str(extracted.get(field, "TBA")).upper()
+                            if "TBA" in val or not val.strip():
+                                tba_count += 1
+                        
+                        sales = extracted.get("sales", [])
+                        if not sales or any("TBA" in str(s.get("open", "TBA")).upper() for s in sales):
+                            tba_count += 1
+
+                        if tba_count < least_tbas:
+                            least_tbas = tba_count
+                            best_data = extracted
+
+                        if tba_count == 0:
+                            status_placeholder.success(f"✅ All fields identified on attempt {attempt}!")
+                            break
+
+                    st.session_state.away_data = best_data
+                    progress_bar.empty()
+                    if least_tbas == 0:
+                        st.toast("✅ Away data successfully extracted with 0 TBAs!")
+                    else:
+                        status_placeholder.warning(f"Extracted best match ({least_tbas} unlisted/TBA fields after {max_attempts} attempts).")
+
+                except Exception as e:
+                    st.error(f"Failed to automatically pull details: {e}")
 
     if st.session_state.away_data:
         st.write("")
@@ -611,12 +675,10 @@ with tab3:
 
             for s in edited_away_sales:
                 sale_tweet = f"""{away_m_name} (A) 🎟️\n\nSale ({s['tier']})\n• Opens: {s['open']}\n• Closes: {s['close']}\n• Guaranteed Sale"""
-                # Schedule reminder 1 hour before start time
                 away_tweets.append((f"🎟️ Sale Reminder ({s['tier']})", get_offset_time(s['open'], hours_before=1), sale_tweet))
 
             if away_fwd != "TBA":
                 fwd_tweet = f"""Forwarding Deadline ➡️\n• Closes: {away_fwd}"""
-                # Schedule forwarding deadline 1 hour before deadline
                 away_tweets.append(("➡️ Forwarding Deadline Reminder", get_offset_time(away_fwd, hours_before=1), fwd_tweet))
 
             st.session_state["active_away_tweets"] = away_tweets
@@ -667,19 +729,27 @@ with tab4:
             if not cl_url:
                 st.error("Please provide the URL.")
             else:
-                with st.spinner("Analyzing Champions League Away page..."):
-                    try:
-                        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-                        response = requests.get(cl_url, headers=headers, timeout=5)
-                        soup = BeautifulSoup(response.text, 'html.parser')
-                        for script in soup(["script", "style", "nav", "footer", "header"]):
-                            script.extract()
-                            
-                        page_text = " ".join(soup.get_text().split())[:20000] 
+                status_placeholder = st.empty()
+                progress_bar = st.progress(0)
+                try:
+                    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                    response = requests.get(cl_url, headers=headers, timeout=10)
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    for script in soup(["script", "style", "nav", "footer", "header"]):
+                        script.extract()
+                    page_text = " ".join(soup.get_text().split())[:35000] 
 
-                        genai.configure(api_key=api_key)
-                        model = genai.GenerativeModel('gemini-2.5-flash')
-                        
+                    genai.configure(api_key=api_key)
+                    model = genai.GenerativeModel('gemini-2.5-flash')
+
+                    max_attempts = 10
+                    best_data = None
+                    least_tbas = 999
+
+                    for attempt in range(1, max_attempts + 1):
+                        status_placeholder.info(f"⏳ Scanning CL Away details (Attempt {attempt}/{max_attempts})...")
+                        progress_bar.progress(attempt / max_attempts)
+
                         prompt = f"""
                         Analyze the following raw text from an LFC Champions League / European Away match ticket page. Exclude any disabled/wheelchair/ambulant sales.
                         Extract opponent name, match date, and sales tiers.
@@ -687,11 +757,8 @@ with tab4:
                         1. For 'tier', simplify the criteria name to something clean like '9+ Games' or '9+ Away Credit Balance' (e.g., if it says 'European Away Match Credit Balance of 9 or more', make tier '9+ Games').
                         2. Look inside EACH sale section for the sentence mentioning 'Forwarding Deadline' and extract its exact date and time into 'forwarding_deadline' for that tier.
                         3. For 'info', extract whether it states 'Guaranteed Sale' (or 'guaranteed'), 'Subject to availability', or leave empty if not stated.
+                        DO NOT return 'TBA' if the date or time exists anywhere in the text.
 
-                        Respond ONLY with a valid raw JSON object matching the structure below. 
-                        Use abbreviated days (e.g., Wed) and months (e.g., Sep) and format times like 8:15am or 11:00am.
-                        If any field is missing, make its value "TBA".
-                        
                         Desired JSON Format:
                         {{
                           "match_name": "Only the opponent team name (e.g., LASK)",
@@ -709,11 +776,43 @@ with tab4:
                         Source Text: {page_text}
                         """
                         ai_response = model.generate_content(prompt)
-                        json_text = ai_response.text.strip().replace("```json", "").replace("```", "")
-                        st.session_state.cl_away_data = json.loads(json_text)
-                        st.toast("✅ CL Away data successfully extracted!")
-                    except Exception as e:
-                        st.error(f"Failed to automatically pull details: {e}")
+                        cleaned_json = ai_response.text.strip().replace("```json", "").replace("```", "").strip()
+                        extracted = json.loads(cleaned_json)
+
+                        tba_count = 0
+                        core_fields = ["match_name", "match_date"]
+                        for field in core_fields:
+                            val = str(extracted.get(field, "TBA")).upper()
+                            if "TBA" in val or not val.strip():
+                                tba_count += 1
+                        
+                        sales = extracted.get("sales", [])
+                        if not sales:
+                            tba_count += 1
+                        else:
+                            for s in sales:
+                                if "TBA" in str(s.get("open", "TBA")).upper():
+                                    tba_count += 1
+                                if "TBA" in str(s.get("forwarding_deadline", "TBA")).upper():
+                                    tba_count += 1
+
+                        if tba_count < least_tbas:
+                            least_tbas = tba_count
+                            best_data = extracted
+
+                        if tba_count == 0:
+                            status_placeholder.success(f"✅ All fields identified on attempt {attempt}!")
+                            break
+
+                    st.session_state.cl_away_data = best_data
+                    progress_bar.empty()
+                    if least_tbas == 0:
+                        st.toast("✅ CL Away data successfully extracted with 0 TBAs!")
+                    else:
+                        status_placeholder.warning(f"Extracted best match ({least_tbas} unlisted/TBA fields after {max_attempts} attempts).")
+
+                except Exception as e:
+                    st.error(f"Failed to automatically pull details: {e}")
 
     if st.session_state.cl_away_data:
         st.write("")
@@ -741,8 +840,6 @@ with tab4:
 
         st.write("")
         if st.button("Generate CL Away Tweet Timelines & Calendars 🚀", type="primary", use_container_width=True, key="cl_gen"):
-            
-            # 1. SALES OVERVIEW ANNOUNCEMENT TWEET
             announcement_blocks = []
             for s in edited_cl_sales:
                 info_tag = ""
@@ -761,7 +858,6 @@ with tab4:
                 ("📢 CL Away Sales Details Announcement", "Immediate / Upon Scanning", cl_announcement_tweet)
             ]
 
-            # 2. INDIVIDUAL TIER SALE REMINDER TWEETS
             for s in edited_cl_sales:
                 open_time_part = s['open'].split(', ')[-1] if ', ' in s['open'] else s['open']
                 
@@ -773,7 +869,6 @@ with tab4:
 
                 sale_tweet = f"""{cl_m_name} (A) 🎟️\n\nSale ({s['tier']})\n• Opens: Today - {open_time_part}\n• Closes: {s['close'].replace(',', ' -')}\n{info_line}\nForwarding Deadline ➡️\n• Closes: {fwd_deadline_text}"""
                 
-                # Reminder 1 hour before start time
                 cl_tweets.append((f"🎟️ Sale Reminder ({s['tier']})", get_offset_time(s['open'], hours_before=1), sale_tweet))
 
             st.session_state["active_cl_tweets"] = cl_tweets
