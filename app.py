@@ -130,12 +130,10 @@ def get_x_intent_url(text):
     return f"https://twitter.com/intent/tweet?text={encoded_text}"
 
 def shorten_tier_name(tier_str):
-    """Shortens lengthy ticketing criteria into clean, compact labels."""
     t_lower = tier_str.lower()
     if any(kw in t_lower for kw in ["wheelchair", "ambulant", "disabled"]):
-        return None # Flag for filtering out
+        return None 
     
-    # Extract numbers if credit balance or games are mentioned
     num_match = re.search(r'(\d+)', tier_str)
     num = num_match.group(1) if num_match else ""
 
@@ -148,7 +146,6 @@ def shorten_tier_name(tier_str):
     if "season ticket" in t_lower:
         return "Season Ticket Holders"
     
-    # Fallback cleanup if no specific match
     cleaned = re.sub(r'(Season Ticket Holders and All Red Members with a.*?Balance of)', '', tier_str, flags=re.IGNORECASE).strip()
     return cleaned if cleaned else tier_str
 
@@ -312,7 +309,7 @@ with tab1:
             sales_list = d.get("sales", [])
             for i, sale in enumerate(sales_list):
                 short_name = shorten_tier_name(sale.get("tier", ""))
-                if not short_name: continue # Skip accessibility
+                if not short_name: continue
                 with st.expander(f"Sale Tier {i+1} ({short_name})", expanded=True):
                     t_name = st.text_input("Criteria", value=short_name, key=f"pl_tier_name_{i}")
                     t_open = editable_date_row("Sale Opens", sale.get("open", ""), f"pl_tier_open_{i}")
@@ -470,7 +467,9 @@ Hallmap link  👇
                     {"label": "Ballots Results", "name": f"{pl_m_name} (H) - Ballots Results", "time": pl_b_res, "all_day": True}
                 ]
                 for s in edited_pl_sales:
-                    events.append({"label": f"Sale ({s['tier']})", "name": f"{pl_m_name} (H) - Sale ({s['tier']})", "time": s['open'], "all_day": False})
+                    events.append({"label": f"Sale Open ({s['tier']})", "name": f"{pl_m_name} (H) - Sale Opens ({s['tier']})", "time": s['open'], "all_day": False})
+                    if s.get("close") and s["close"] != "TBA":
+                        events.append({"label": f"Sale Close ({s['tier']})", "name": f"{pl_m_name} (H) - Sale Closes ({s['tier']})", "time": s['close'], "all_day": False})
                 events.append({"label": "Match Day", "name": f"{pl_m_name} (H) - Match Date", "time": pl_m_date, "all_day": False})
 
                 for i, ev in enumerate(events):
@@ -487,12 +486,12 @@ Hallmap link  👇
 # ==========================================
 with tab2:
     with st.container(border=True):
-        cup_url = st.text_input("🔗 Ticket Page URL (Cup):", placeholder="https://www.liverpoolfc.com/tickets/...", key="cup_url")
+        cup_url = st.text_input("🔗 Ticket Page URL (Cup/European Home):", placeholder="https://www.liverpoolfc.com/tickets/...", key="cup_url")
         if st.button("Scan Cup Page 🔍", use_container_width=True, key="cup_scan"):
             if not cup_url:
                 st.error("Please provide the URL.")
             else:
-                with st.spinner("Analyzing Cup ticketing page..."):
+                with st.spinner("Analyzing Cup/European ticketing page..."):
                     try:
                         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
                         response = requests.get(cup_url, headers=headers, timeout=5)
@@ -504,8 +503,8 @@ with tab2:
                         genai.configure(api_key=api_key)
                         model = genai.GenerativeModel('gemini-2.5-flash')
                         prompt = f"""
-                        Analyze the following raw text from an LFC Cup match ticket page. Exclude any wheelchair, ambulant, or disabled sales tiers.
-                        Extract opponent name, sales tiers with open/close times, local ballot dates, and ACS dates.
+                        Analyze the following raw text from an LFC Cup or European Home match ticket page. Exclude any wheelchair, ambulant, or disabled sales tiers.
+                        Extract opponent name, competition type (determine whether it is 'League Cup', 'FA Cup', or 'Champions League' / 'European Home' based on the text), sales tiers with open/close times, local ballot dates, and ACS dates.
                         Respond ONLY with a valid raw JSON object matching the structure below. 
                         Use abbreviated days (e.g., Wed) and months (e.g., Nov) and format times like 10:00am or 11:00am.
                         If any field is missing, make its value "TBA".
@@ -513,6 +512,7 @@ with tab2:
                         Desired JSON Format:
                         {{
                           "match_name": "Only the opponent team name (e.g., Spurs)",
+                          "competition": "League Cup, FA Cup, or Champions League",
                           "sales": [
                             {{"tier": "Credit balance of 2", "open": "Day Date, Time", "close": "Day Date, Time"}}
                           ],
@@ -537,6 +537,7 @@ with tab2:
         st.subheader("⚙️ Refine Details")
         cd = st.session_state.cup_data
         cup_m_name = st.text_input("Opponent Team Name", value=cd.get("match_name", ""), key="cup_m_name")
+        cup_comp = st.text_input("Competition Type", value=cd.get("competition", "League Cup"), key="cup_comp")
         
         with st.container(border=True):
             st.markdown("#### 🎟️ Tiered Sales")
@@ -572,8 +573,16 @@ with tab2:
             
             cup_tweets = [("📢 Cup Sales Announcement", "Immediate / Upon Scanning", announcement_tweet)]
             for s in edited_cup_sales:
-                sale_tweet = f"""{cup_m_name} (League Cup)  🎟️\n\nSale ({s['tier']})\n• Opens: {s['open']}\n• Closes: {s['close']}\n\nNo registration needed, pre-queue starts 30 minutes before."""
-                cup_tweets.append((f"🎟️ Sale ({s['tier']})", s['open'], sale_tweet))
+                # 1 hour before opening time
+                open_rem_time = get_offset_time(s['open'], hours_before=1)
+                open_tweet = f"""{cup_m_name} ({cup_comp})  🎟️\n\nSale ({s['tier']})\n• Opens: {s['open']}\n• Closes: {s['close']}\n\nNo registration needed, pre-queue starts 30 minutes before."""
+                cup_tweets.append((f"🎟️ Sale Opening ({s['tier']})", open_rem_time, open_tweet))
+
+                # 1 hour before closing time (if close is valid)
+                if s.get("close") and s["close"] != "TBA":
+                    close_rem_time = get_offset_time(s['close'], hours_before=1)
+                    close_tweet = f"""{cup_m_name} ({cup_comp}) ⏰\n\nSale Closing Reminder ({s['tier']})\n• Closes: {s['close']}\n\nDon't miss out!"""
+                    cup_tweets.append((f"⏰ Sale Closing ({s['tier']})", close_rem_time, close_tweet))
 
             st.session_state.active_cup_tweets = cup_tweets
 
@@ -618,7 +627,9 @@ with tab2:
                     {"label": "ACS Payment End", "name": f"{cup_m_name} (H) - ACS Payment End", "time": cup_acs_end, "all_day": True}
                 ]
                 for s in edited_cup_sales:
-                    cup_events.append({"label": f"Sale ({s['tier']})", "name": f"{cup_m_name} (H) - Sale ({s['tier']})", "time": s['open'], "all_day": False})
+                    cup_events.append({"label": f"Sale Open ({s['tier']})", "name": f"{cup_m_name} (H) - Sale Opens ({s['tier']})", "time": s['open'], "all_day": False})
+                    if s.get("close") and s["close"] != "TBA":
+                        cup_events.append({"label": f"Sale Close ({s['tier']})", "name": f"{cup_m_name} (H) - Sale Closes ({s['tier']})", "time": s['close'], "all_day": False})
                 cup_events.append({"label": "Match Day", "name": f"{cup_m_name} (H) - Match Date", "time": cup_m_date, "all_day": False})
 
                 for i, ev in enumerate(cup_events):
@@ -713,12 +724,19 @@ with tab3:
 
             away_tweets = [("📢 Sales Detail Announcement", "Immediate / Upon Scanning", announcement_tweet)]
             for s in edited_away_sales:
+                open_rem_time = get_offset_time(s['open'], hours_before=1)
                 sale_tweet = f"""{away_m_name} (A) 🎟️\n\nSale ({s['tier']})\n• Opens: {s['open']}\n• Closes: {s['close']}\n• Guaranteed Sale"""
-                away_tweets.append((f"🎟️ Sale ({s['tier']})", s['open'], sale_tweet))
+                away_tweets.append((f"🎟️ Sale Opening ({s['tier']})", open_rem_time, sale_tweet))
+
+                if s.get("close") and s["close"] != "TBA":
+                    close_rem_time = get_offset_time(s['close'], hours_before=1)
+                    close_tweet = f"""{away_m_name} (A) ⏰\n\nSale Closing Reminder ({s['tier']})\n• Closes: {s['close']}"""
+                    away_tweets.append((f"⏰ Sale Closing ({s['tier']})", close_rem_time, close_tweet))
 
             if away_fwd != "TBA":
+                fwd_rem_time = get_offset_time(away_fwd, hours_before=1)
                 fwd_tweet = f"""Forwarding Deadline ➡️\n• Closes: {away_fwd}"""
-                away_tweets.append(("➡️ Forwarding Deadline", away_fwd, fwd_tweet))
+                away_tweets.append(("➡️ Forwarding Deadline", fwd_rem_time, fwd_tweet))
 
             st.session_state.active_away_tweets = away_tweets
 
@@ -801,7 +819,7 @@ with tab4:
                         Analyze the following raw text from an LFC Champions League / European Away match ticket page. Exclude any wheelchair, ambulant, or disabled sales tiers.
                         Extract opponent name, match date, and sales tiers.
                         CRITICAL INSTRUCTIONS:
-                        1. For 'tier', simplify the criteria name to something clean like '9+ Games' or '9+ Away Credit Balance' (e.g., if it says 'with a European Away Match Credit Balance of 9 or more', make tier '9+ Games').
+                        1. For 'tier', simplify the criteria name to something clean like '9+ Games' or '9+ Away Credit Balance'.
                         2. Look inside EACH sale section for the sentence mentioning 'Forwarding Deadline' and extract its exact date and time into 'forwarding_deadline' for that tier.
                         3. For 'info', extract whether it states 'Guaranteed Sale' (or 'guaranteed'), 'Subject to availability', or leave empty if not stated.
 
@@ -885,6 +903,7 @@ Match Date • {cl_m_date} 🏟️"""
             ]
 
             for s in edited_cl_sales:
+                open_rem_time = get_offset_time(s['open'], hours_before=1)
                 open_time_part = s['open'].split(', ')[-1] if ', ' in s['open'] else s['open']
                 info_line = ""
                 if s['info'].strip():
@@ -892,15 +911,18 @@ Match Date • {cl_m_date} 🏟️"""
 
                 fwd_deadline_text = s['forwarding_deadline'].replace(',', ' -') if ',' in s['forwarding_deadline'] else s['forwarding_deadline']
 
-                sale_tweet = f"""{cl_m_name} (A) 🎟️
+                sale_tweet = f"""{cl_m_name} (A) 🎟️\n\nSale ({s['tier']})\n• Opens: Today - {open_time_part}\n• Closes: {s['close'].replace(',', ' -')}\n{info_line}\nForwarding Deadline ➡️\n• Closes: {fwd_deadline_text}"""
+                cl_tweets.append((f"🎟️ Sale Opening ({s['tier']})", open_rem_time, sale_tweet))
 
-Sale ({s['tier']})
-• Opens: Today - {open_time_part}
-• Closes: {s['close'].replace(',', ' -')}
-{info_line}
-Forwarding Deadline ➡️
-• Closes: {fwd_deadline_text}"""
-                cl_tweets.append((f"🎟️ Sale ({s['tier']})", s['open'], sale_tweet))
+                if s.get("close") and s["close"] != "TBA":
+                    close_rem_time = get_offset_time(s['close'], hours_before=1)
+                    close_tweet = f"""{cl_m_name} (A) ⏰\n\nSale Closing Reminder ({s['tier']})\n• Closes: {s['close']}"""
+                    cl_tweets.append((f"⏰ Sale Closing ({s['tier']})", close_rem_time, close_tweet))
+
+                if s.get("forwarding_deadline") and s["forwarding_deadline"] != "TBA":
+                    fwd_rem_time = get_offset_time(s['forwarding_deadline'], hours_before=1)
+                    fwd_tweet = f"""{cl_m_name} (A) ➡️\n\nForwarding Deadline ({s['tier']})\n• Closes: {s['forwarding_deadline']}"""
+                    cl_tweets.append((f"➡️ Forwarding Deadline ({s['tier']})", fwd_rem_time, fwd_tweet))
 
             st.session_state.active_cl_tweets = cl_tweets
 
