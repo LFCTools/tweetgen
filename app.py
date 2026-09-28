@@ -318,6 +318,75 @@ def get_hallmap_link(opponent_name):
     )
 
 
+# --- MOBILE-OPTIMIZED UI WIDGET ---
+def editable_date_row(label, default_val, key):
+    raw_val = str(default_val).strip() if default_val else "TBA"
+
+    if (
+        f"{key}_default" not in st.session_state
+        or st.session_state[f"{key}_default"] != raw_val
+    ):
+        st.session_state[f"{key}_default"] = raw_val
+        dt_obj = parse_to_datetime(raw_val)
+
+        st.session_state[f"{key}_tba"] = raw_val.upper() == "TBA" or not raw_val
+        st.session_state[f"{key}_allday"] = bool(
+            raw_val
+            and raw_val.upper() != "TBA"
+            and not any(m in raw_val.lower() for m in ["am", "pm", ":"])
+        )
+        st.session_state[f"{key}_date"] = (
+            dt_obj.date() if dt_obj else datetime.today().date()
+        )
+        st.session_state[f"{key}_time"] = (
+            dt_obj.time() if dt_obj else datetime.strptime("09:00am", "%I:%M%p").time()
+        )
+
+    is_tba = st.session_state[f"{key}_tba"]
+    all_day = st.session_state[f"{key}_allday"]
+    d = st.session_state[f"{key}_date"]
+    t = st.session_state[f"{key}_time"]
+
+    if is_tba:
+        display_val = "TBA"
+    elif all_day:
+        display_val = d.strftime("%a %d %b")
+    else:
+        dt_obj = parse_to_datetime(raw_val)
+        if dt_obj:
+            time_formatted = dt_obj.strftime("%I:%M%p").lstrip("0").lower()
+            display_val = f"{dt_obj.strftime('%a %d %b')}, {time_formatted}"
+        else:
+            display_val = raw_val
+
+    edit_mode = st.toggle(f"✏️ **{label}** : {display_val}", key=f"toggle_{key}")
+
+    if edit_mode:
+        with st.container(border=True):
+            c1, c2 = st.columns(2)
+            with c1:
+                st.date_input(
+                    "Date", key=f"{key}_date", disabled=st.session_state[f"{key}_tba"]
+                )
+                st.checkbox("TBA", key=f"{key}_tba")
+            with c2:
+                st.time_input(
+                    "Time",
+                    key=f"{key}_time",
+                    disabled=(
+                        st.session_state[f"{key}_tba"]
+                        or st.session_state[f"{key}_allday"]
+                    ),
+                )
+                st.checkbox(
+                    "All Day",
+                    key=f"{key}_allday",
+                    disabled=st.session_state[f"{key}_tba"],
+                )
+
+    return display_val
+
+
 # --- STREAMLIT CONFIG & STATE ---
 st.set_page_config(
     page_title="LFC Alerts & Scheduler", page_icon="🔴", layout="centered"
@@ -600,162 +669,1219 @@ with tab1:
 
             st.session_state["active_pl_tweets"] = tweets_timeline
 
-        if (
-            "active_pl_tweets" in st.session_state
-            and st.session_state["active_pl_tweets"]
-        ):
-            with st.container(border=True):
-                st.markdown("### 📅 Add All Events to Calendar")
+    if (
+        "active_pl_tweets" in st.session_state
+        and st.session_state["active_pl_tweets"]
+    ):
+        with st.container(border=True):
+            st.markdown("### 📅 Add All Events to Calendar")
 
-                pl_events = [
-                    (
-                        f"Liverpool v {pl_m_name} (H)",
-                        parse_to_datetime(pl_m_date),
-                        f"Premier League matchday at Anfield. Kickoff: {pl_m_date}",
-                        False,
-                    ),
-                    (
-                        f"{pl_m_name} - Registration Opens",
-                        parse_to_datetime(pl_r_open),
-                        f"Registration opens for Liverpool v {pl_m_name} (H)",
-                        False,
-                    ),
-                    (
-                        f"{pl_m_name} - Registration Closes",
-                        parse_to_datetime(pl_r_close),
-                        f"Registration closes for Liverpool v {pl_m_name} (H)",
-                        False,
-                    ),
-                    (
-                        f"{pl_m_name} - Local & YA Ballots Open",
-                        parse_to_datetime(pl_b_open),
-                        f"Ballots open for {pl_m_name}",
-                        False,
-                    ),
-                    (
-                        f"{pl_m_name} - Local & YA Ballots Close",
-                        parse_to_datetime(pl_b_close),
-                        f"Ballots close for {pl_m_name}",
-                        False,
-                    ),
-                    (
-                        f"{pl_m_name} - Ballot Results Day",
-                        parse_to_datetime(pl_b_res),
-                        f"Ballot results announced today for {pl_m_name}",
-                        True,
-                    ),
-                ]
-                for s in edited_pl_sales:
+            pl_events = [
+                (
+                    f"Liverpool v {pl_m_name} (H)",
+                    parse_to_datetime(pl_m_date),
+                    f"Premier League matchday at Anfield. Kickoff: {pl_m_date}",
+                    False,
+                ),
+                (
+                    f"{pl_m_name} - Registration Opens",
+                    parse_to_datetime(pl_r_open),
+                    f"Registration opens for Liverpool v {pl_m_name} (H)",
+                    False,
+                ),
+                (
+                    f"{pl_m_name} - Registration Closes",
+                    parse_to_datetime(pl_r_close),
+                    f"Registration closes for Liverpool v {pl_m_name} (H)",
+                    False,
+                ),
+                (
+                    f"{pl_m_name} - Local & YA Ballots Open",
+                    parse_to_datetime(pl_b_open),
+                    f"Ballots open for {pl_m_name}",
+                    False,
+                ),
+                (
+                    f"{pl_m_name} - Local & YA Ballots Close",
+                    parse_to_datetime(pl_b_close),
+                    f"Ballots close for {pl_m_name}",
+                    False,
+                ),
+                (
+                    f"{pl_m_name} - Ballot Results Day",
+                    parse_to_datetime(pl_b_res),
+                    f"Ballot results announced today for {pl_m_name}",
+                    True,
+                ),
+            ]
+            for s in edited_pl_sales:
+                pl_events.append((
+                    f"{pl_m_name} - {s['tier']} Sale Opens",
+                    parse_to_datetime(s["open"]),
+                    f"Ticket sale opens for {s['tier']}",
+                    False,
+                ))
+                if s.get("close") and s["close"] != "TBA":
                     pl_events.append((
-                        f"{pl_m_name} - {s['tier']} Sale Opens",
-                        parse_to_datetime(s["open"]),
-                        f"Ticket sale opens for {s['tier']}",
+                        f"{pl_m_name} - {s['tier']} Sale Closes",
+                        parse_to_datetime(s["close"]),
+                        f"Ticket sale closes for {s['tier']}",
                         False,
                     ))
-                    if s.get("close") and s["close"] != "TBA":
-                        pl_events.append((
-                            f"{pl_m_name} - {s['tier']} Sale Closes",
-                            parse_to_datetime(s["close"]),
-                            f"Ticket sale closes for {s['tier']}",
-                            False,
-                        ))
 
-                master_gcal_date = parse_to_datetime(pl_m_date) or parse_to_datetime(
-                    pl_r_open
+            master_gcal_date = parse_to_datetime(pl_m_date) or parse_to_datetime(
+                pl_r_open
+            )
+            if master_gcal_date:
+                master_gcal_url = get_gcal_url(
+                    f"Liverpool v {pl_m_name} - Ticket Schedule & Matchday",
+                    master_gcal_date,
+                    announcement_tweet,
                 )
-                if master_gcal_date:
-                    master_gcal_url = get_gcal_url(
-                        f"Liverpool v {pl_m_name} - Ticket Schedule & Matchday",
-                        master_gcal_date,
-                        announcement_tweet,
-                    )
-                    st.link_button(
-                        f"📅 Add All {pl_m_name} Fixture Details to Google Calendar"
-                        " (Master Event)",
-                        master_gcal_url,
-                        use_container_width=True,
-                    )
-
-                ics_data = generate_fixture_ics(pl_m_name, pl_events)
-                st.download_button(
-                    label=f"📥 Download All {pl_m_name} Events to Calendar (.ics)",
-                    data=ics_data,
-                    file_name=f"{pl_m_name.lower()}_all_events.ics",
-                    mime="text/calendar",
+                st.link_button(
+                    f"📅 Add All {pl_m_name} Fixture Details to Google Calendar"
+                    " (Master Event)",
+                    master_gcal_url,
                     use_container_width=True,
                 )
 
-                st.caption(
-                    "Or click an individual event to add directly to Google Calendar:"
+            ics_data = generate_fixture_ics(pl_m_name, pl_events)
+            st.download_button(
+                label=f"📥 Download All {pl_m_name} Events to Calendar (.ics)",
+                data=ics_data,
+                file_name=f"{pl_m_name.lower()}_all_events.ics",
+                mime="text/calendar",
+                use_container_width=True,
+            )
+
+            st.caption(
+                "Or click an individual event to add directly to Google Calendar:"
+            )
+            c1, c2 = st.columns(2)
+            for idx, (title, dt, desc, is_all_day) in enumerate(pl_events):
+                if dt:
+                    target_col = c1 if idx % 2 == 0 else c2
+                    with target_col:
+                        st.link_button(
+                            f"📅 {title}",
+                            get_gcal_url(title, dt, desc, is_all_day),
+                            use_container_width=True,
+                        )
+
+        with st.container(border=True):
+            st.markdown("### ⚡ Buffer Automation")
+
+            if st.button(
+                "🚀 Schedule All Reminders to Buffer Queue",
+                type="primary",
+                use_container_width=True,
+                key="buffer_schedule_action_pl",
+            ):
+                progress_bar = st.progress(0)
+                success_count = 0
+                active_list = st.session_state["active_pl_tweets"]
+
+                queue_list = [
+                    t
+                    for t in active_list
+                    if "Sales Detail Announcement" not in t[0]
+                    and "Sales Details Announcement" not in t[0]
+                ]
+
+                for idx, (title, post_time_str, content) in enumerate(queue_list):
+                    dt_target = parse_to_datetime(post_time_str)
+                    if not dt_target or "Immediate" in post_time_str:
+                        dt_target = datetime.now() + timedelta(minutes=2)
+
+                    ok, msg = schedule_to_buffer(content, dt_target)
+                    if ok:
+                        success_count += 1
+                    else:
+                        st.error(f"Failed to queue '{title}': {msg}")
+
+                    progress_bar.progress((idx + 1) / len(queue_list))
+
+                st.success(
+                    f"🎉 Successfully scheduled {success_count}/{len(queue_list)}"
+                    " reminders to your Buffer queue! (Announcement post excluded)"
                 )
-                c1, c2 = st.columns(2)
-                for idx, (title, dt, desc, is_all_day) in enumerate(pl_events):
-                    if dt:
-                        target_col = c1 if idx % 2 == 0 else c2
-                        with target_col:
+
+            st.divider()
+            st.markdown("### 🐦 Preview Scheduled Timeline & Calendar Actions")
+            for title, post_time, content in st.session_state["active_pl_tweets"]:
+                with st.expander(f"{title} — *Scheduled: {post_time}*"):
+                    st.code(content, language="text")
+                    col_x, col_cal = st.columns(2)
+                    with col_x:
+                        x_url = get_x_intent_url(content)
+                        st.link_button(f"🌐 Post on X", x_url, use_container_width=True)
+                    with col_cal:
+                        dt_event = parse_to_datetime(post_time)
+                        if dt_event:
+                            cal_url = get_gcal_url(
+                                f"{pl_m_name} (H): {title}", dt_event, content
+                            )
                             st.link_button(
-                                f"📅 {title}",
-                                get_gcal_url(title, dt, desc, is_all_day),
+                                "📅 Add to Google Calendar",
+                                cal_url,
                                 use_container_width=True,
                             )
 
-            with st.container(border=True):
-                st.markdown("### ⚡ Buffer Automation")
 
-                if st.button(
-                    "🚀 Schedule All Reminders to Buffer Queue",
-                    type="primary",
-                    use_container_width=True,
-                    key="buffer_schedule_action_pl",
+# ==========================================
+# TAB 2: CUP GAMES
+# ==========================================
+with tab2:
+    with st.container(border=True):
+        cup_url = st.text_input(
+            "🔗 Ticket Page URL (Cup):",
+            placeholder="https://www.liverpoolfc.com/tickets/...",
+            key="cup_url",
+        )
+        if st.button("Scan Cup Page 🔍", use_container_width=True, key="cup_scan"):
+            if not cup_url:
+                st.error("Please provide the URL.")
+            else:
+                status_placeholder = st.empty()
+                progress_bar = st.progress(0)
+                try:
+                    headers = {
+                        "User-Agent": (
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                        )
+                    }
+                    response = requests.get(cup_url, headers=headers, timeout=10)
+                    soup = BeautifulSoup(response.text, "html.parser")
+                    for script in soup(["script", "style", "nav", "footer", "header"]):
+                        script.extract()
+                    page_text = " ".join(soup.get_text().split())[:35000]
+
+                    genai.configure(api_key=api_key)
+                    model = genai.GenerativeModel("gemini-2.5-flash")
+
+                    max_attempts = 10
+                    best_data = None
+                    least_tbas = 999
+
+                    for attempt in range(1, max_attempts + 1):
+                        status_placeholder.info(
+                            f"⏳ Scanning Cup details (Attempt {attempt}/{max_attempts})..."
+                        )
+                        progress_bar.progress(attempt / max_attempts)
+
+                        prompt = f"""
+                        Analyze this raw text from an LFC Cup match ticket page.
+                        Extract opponent name, sales tiers with open/close times, local ballot dates, and ACS dates.
+                        DO NOT return 'TBA' if the date exists anywhere in the text.
+
+                        Desired JSON Format:
+                        {{
+                          "match_name": "Spurs",
+                          "sales": [
+                            {{"tier": "Credit balance of 2", "open": "Day Date, Time", "close": "Day Date, Time"}}
+                          ],
+                          "ballot_open": "Day Date, Time",
+                          "ballot_close": "Day Date, Time",
+                          "ballot_results": "Day Date",
+                          "acs_start": "Day Date",
+                          "acs_end": "Day Date",
+                          "match_date": "Day Date, Time"
+                        }}
+                        Source Text: {page_text}
+                        """
+                        ai_response = model.generate_content(prompt)
+                        cleaned_json = (
+                            ai_response.text.strip()
+                            .replace("```json", "")
+                            .replace("```", "")
+                            .strip()
+                        )
+                        extracted = json.loads(cleaned_json)
+
+                        tba_count = 0
+                        core_fields = [
+                            "match_name",
+                            "ballot_open",
+                            "ballot_close",
+                            "ballot_results",
+                            "acs_start",
+                            "acs_end",
+                            "match_date",
+                        ]
+                        for field in core_fields:
+                            val = str(extracted.get(field, "TBA")).upper()
+                            if "TBA" in val or not val.strip():
+                                tba_count += 1
+
+                        sales = extracted.get("sales", [])
+                        if not sales or any(
+                            "TBA" in str(s.get("open", "TBA")).upper() for s in sales
+                        ):
+                            tba_count += 1
+
+                        if tba_count < least_tbas:
+                            least_tbas = tba_count
+                            best_data = extracted
+
+                        if tba_count == 0:
+                            status_placeholder.success(
+                                f"✅ All fields identified on attempt {attempt}!"
+                            )
+                            break
+
+                    st.session_state.cup_data = best_data
+                    progress_bar.empty()
+                    if least_tbas == 0:
+                        st.toast("✅ Cup data successfully extracted with 0 TBAs!")
+                    else:
+                        status_placeholder.warning(
+                            f"Extracted best match ({least_tbas} unlisted/TBA fields after"
+                            f" {max_attempts} attempts)."
+                        )
+
+                except Exception as e:
+                    st.error(f"Failed to automatically pull details: {e}")
+
+    if st.session_state.cup_data:
+        st.write("")
+        st.subheader("⚙️ Refine Details")
+        cd = st.session_state.cup_data
+
+        with st.container(border=True):
+            cup_m_name = st.text_input(
+                "Opponent Team Name",
+                value=cd.get("match_name", ""),
+                key="cup_m_name",
+            )
+
+        with st.container(border=True):
+            st.markdown("#### 🎟️ Tiered Sales")
+            edited_sales = []
+            for i, sale in enumerate(cd.get("sales", [])):
+                with st.expander(
+                    f"Sale Tier {i+1} ({sale.get('tier', 'Unknown')})", expanded=True
                 ):
-                    progress_bar = st.progress(0)
-                    success_count = 0
-                    active_list = st.session_state["active_pl_tweets"]
-
-                    queue_list = [
-                        t
-                        for t in active_list
-                        if "Sales Detail Announcement" not in t[0]
-                        and "Sales Details Announcement" not in t[0]
-                    ]
-
-                    for idx, (title, post_time_str, content) in enumerate(queue_list):
-                        dt_target = parse_to_datetime(post_time_str)
-                        if not dt_target or "Immediate" in post_time_str:
-                            dt_target = datetime.now() + timedelta(minutes=2)
-
-                        ok, msg = schedule_to_buffer(content, dt_target)
-                        if ok:
-                            success_count += 1
-                        else:
-                            st.error(f"Failed to queue '{title}': {msg}")
-
-                        progress_bar.progress((idx + 1) / len(queue_list))
-
-                    st.success(
-                        f"🎉 Successfully scheduled {success_count}/{len(queue_list)}"
-                        " reminders to your Buffer queue! (Announcement post excluded)"
+                    t_name = st.text_input(
+                        "Criteria", value=sale.get("tier", ""), key=f"tier_name_{i}"
+                    )
+                    t_open = editable_date_row(
+                        "Opens", sale.get("open", ""), f"tier_open_{i}"
+                    )
+                    t_close = editable_date_row(
+                        "Closes", sale.get("close", ""), f"tier_close_{i}"
+                    )
+                    edited_sales.append(
+                        {"tier": t_name, "open": t_open, "close": t_close}
                     )
 
-                st.divider()
-                st.markdown("### 🐦 Preview Scheduled Timeline & Calendar Actions")
-                for title, post_time, content in st.session_state["active_pl_tweets"]:
-                    with st.expander(f"{title} — *Scheduled: {post_time}*"):
-                        st.code(content, language="text")
-                        col_x, col_cal = st.columns(2)
-                        with col_x:
-                            x_url = get_x_intent_url(content)
-                            st.link_button(f"🌐 Post on X", x_url, use_container_width=True)
-                        with col_cal:
-                            dt_event = parse_to_datetime(post_time)
-                            if dt_event:
-                                cal_url = get_gcal_url(
-                                    f"{pl_m_name} (H): {title}", dt_event, content
-                                )
-                                st.link_button(
-                                    "📅 Add to Google Calendar",
-                                    cal_url,
-                                    use_container_width=True,
-                                )
+        with st.container(border=True):
+            st.markdown("#### 🗳️ Local Ballot (No YA for Cup)")
+            cup_b_open = editable_date_row(
+                "Local Ballot Opens", cd.get("ballot_open", ""), "cup_b_open"
+            )
+            cup_b_close = editable_date_row(
+                "Local Ballot Closes", cd.get("ballot_close", ""), "cup_b_close"
+            )
+            cup_b_res = editable_date_row(
+                "Local Ballot Results", cd.get("ballot_results", "TBA"), "cup_b_res"
+            )
 
-# (The same individual button structure is maintained identically across Tabs 2, 3, and 4 in your file's architecture)
+        with st.container(border=True):
+            st.markdown("#### 💰 Auto Cup Scheme & Match Details")
+            cup_acs_start = editable_date_row(
+                "ACS Payment Start", cd.get("acs_start", ""), "cup_acs_start"
+            )
+            cup_acs_end = editable_date_row(
+                "ACS Payment End", cd.get("acs_end", ""), "cup_acs_end"
+            )
+            cup_m_date = editable_date_row(
+                "Match Date & Time", cd.get("match_date", ""), "cup_m_date"
+            )
+
+        st.write("")
+        if st.button(
+            "Generate Cup Tweet Timelines & Calendars 🚀",
+            type="primary",
+            use_container_width=True,
+            key="cup_gen",
+        ):
+            sales_formatted_text = ""
+            for s in edited_sales:
+                sales_formatted_text += (
+                    f"Sale ({s['tier']})\n• Opens: {s['open']}\n• Closes: {s['close']}\n\n"
+                )
+
+            announcement_tweet = f"""{cup_m_name} (H) - Sale Details 📢\n\n{sales_formatted_text}Local Ballot 🗳️\n• Opens: {cup_b_open}\n• Closes: {cup_b_close}\n• Results: {cup_b_res}\n\nACS Payment Run 💰\n• {cup_acs_start} - {cup_acs_end}\n\nMatch Date • {cup_m_date} 🏟️"""
+            ballots_res_tweet = f"""{cup_m_name} (H) - Local Ballots 📢\n\nLocal Ballot Results 🗳️\n• Results today\n• Ensure you have funds in your bank \n\nComment below if successful 👇"""
+
+            cup_ballots_res_scheduled = get_results_day_morning(cup_b_res)
+
+            cup_tweets_timeline = [
+                (
+                    "📢 Cup Sales Announcement",
+                    "Immediate / Upon Scanning",
+                    announcement_tweet,
+                ),
+                (
+                    "🗳️ Local Ballot Opening",
+                    cup_b_open,
+                    f"""{cup_m_name} (H) - Local Ballot 📢\n\nLocal Ballot 🗳️\n• Opens: Now\n• Closes: {cup_b_close}\n\nhttps://ticketing.liverpoolfc.com/tickets/ballots""",
+                ),
+                (
+                    "⏰ Local Ballot Closing Reminder",
+                    get_offset_time(cup_b_close, hours_before=1),
+                    f"""{cup_m_name} (H) - Local Ballot 📢\n\nLocal Ballot 🗳️\n• Opens: Now\n• Closes: Today {cup_b_close.split(', ')[-1] if ',' in cup_b_close else cup_b_close}\n\nhttps://ticketing.liverpoolfc.com/tickets/ballots""",
+                ),
+                ("🗳️ Local Ballot Results", cup_ballots_res_scheduled, ballots_res_tweet),
+            ]
+
+            for s in edited_sales:
+                opening_tweet = f"""{cup_m_name} (League Cup)  🎟️\n\nSale ({s['tier']})\n• Opens: {s['open']}\n• Closes: {s['close']}\n\nNo registration needed, pre-queue starts 30 minutes before."""
+                cup_tweets_timeline.append((
+                    f"🎟️ Sale Reminder ({s['tier']})",
+                    get_offset_time(s["open"], hours_before=1),
+                    opening_tweet,
+                ))
+
+                if check_sale_duration(s["open"], s["close"]):
+                    closing_tweet = f"""{cup_m_name} (H) 🎟️\n\nSale ({s['tier']})\n• Opens: {s['open']}\n• Closes: {s['close']}"""
+                    cup_tweets_timeline.append((
+                        f"⏰ Sale Closing Reminder ({s['tier']})",
+                        get_offset_time(s["close"], hours_before=1),
+                        closing_tweet,
+                    ))
+
+            st.session_state["active_cup_tweets"] = cup_tweets_timeline
+
+    if (
+        "active_cup_tweets" in st.session_state
+        and st.session_state["active_cup_tweets"]
+    ):
+        with st.container(border=True):
+            st.markdown("### 📅 Add All Events to Calendar")
+
+            cup_events = [
+                (
+                    f"Liverpool v {cup_m_name} (H)",
+                    parse_to_datetime(cup_m_date),
+                    f"Cup match at Anfield: {cup_m_date}",
+                    False,
+                ),
+                (
+                    f"{cup_m_name} - Local Ballot Opens",
+                    parse_to_datetime(cup_b_open),
+                    f"Local Ballot opens for {cup_m_name}",
+                    False,
+                ),
+                (
+                    f"{cup_m_name} - Local Ballot Closes",
+                    parse_to_datetime(cup_b_close),
+                    f"Local Ballot closes for {cup_m_name}",
+                    False,
+                ),
+                (
+                    f"{cup_m_name} - Local Ballot Results Day",
+                    parse_to_datetime(cup_b_res),
+                    f"Local Ballot results for {cup_m_name}",
+                    True,
+                ),
+                (
+                    f"{cup_m_name} - ACS Payment Run Starts",
+                    parse_to_datetime(cup_acs_start),
+                    f"Auto Cup Scheme payment run begins for {cup_m_name}",
+                    True,
+                ),
+                (
+                    f"{cup_m_name} - ACS Payment Run Ends",
+                    parse_to_datetime(cup_acs_end),
+                    f"Auto Cup Scheme payment run ends for {cup_m_name}",
+                    True,
+                ),
+            ]
+            for s in edited_sales:
+                cup_events.append((
+                    f"{cup_m_name} - {s['tier']} Sale Opens",
+                    parse_to_datetime(s["open"]),
+                    f"Ticket sale opens for {s['tier']}",
+                    False,
+                ))
+                if s.get("close") and s["close"] != "TBA":
+                    cup_events.append((
+                        f"{cup_m_name} - {s['tier']} Sale Closes",
+                        parse_to_datetime(s["close"]),
+                        f"Ticket sale closes for {s['tier']}",
+                        False,
+                    ))
+
+            master_cup_date = parse_to_datetime(cup_m_date) or parse_to_datetime(
+                cup_b_open
+            )
+            if master_cup_date:
+                master_cup_url = get_gcal_url(
+                    f"Liverpool v {cup_m_name} - Cup Ticket Schedule & Matchday",
+                    master_cup_date,
+                    announcement_tweet,
+                )
+                st.link_button(
+                    f"📅 Add All {cup_m_name} Fixture Details to Google Calendar"
+                    " (Master Event)",
+                    master_cup_url,
+                    use_container_width=True,
+                )
+
+            ics_cup_data = generate_fixture_ics(cup_m_name, cup_events)
+            st.download_button(
+                label=f"📥 Download All {cup_m_name} Events to Calendar (.ics)",
+                data=ics_cup_data,
+                file_name=f"{cup_m_name.lower()}_cup_all_events.ics",
+                mime="text/calendar",
+                use_container_width=True,
+            )
+
+            st.caption(
+                "Or click an individual event to add directly to Google Calendar:"
+            )
+            c1, c2 = st.columns(2)
+            for idx, (title, dt, desc, is_all_day) in enumerate(cup_events):
+                if dt:
+                    target_col = c1 if idx % 2 == 0 else c2
+                    with target_col:
+                        st.link_button(
+                            f"📅 {title}",
+                            get_gcal_url(title, dt, desc, is_all_day),
+                            use_container_width=True,
+                        )
+
+        with st.container(border=True):
+            st.markdown("### ⚡ Buffer Automation")
+
+            if st.button(
+                "🚀 Schedule All Reminders to Buffer Queue",
+                type="primary",
+                use_container_width=True,
+                key="buffer_schedule_action_cup",
+            ):
+                progress_bar = st.progress(0)
+                success_count = 0
+                active_list = st.session_state["active_cup_tweets"]
+
+                queue_list = [
+                    t
+                    for t in active_list
+                    if "Sales Announcement" not in t[0]
+                    and "Sales Detail Announcement" not in t[0]
+                ]
+
+                for idx, (title, post_time_str, content) in enumerate(queue_list):
+                    dt_target = parse_to_datetime(post_time_str)
+                    if not dt_target or "Immediate" in post_time_str:
+                        dt_target = datetime.now() + timedelta(minutes=2)
+
+                    ok, msg = schedule_to_buffer(content, dt_target)
+                    if ok:
+                        success_count += 1
+                    else:
+                        st.error(f"Failed to queue '{title}': {msg}")
+
+                    progress_bar.progress((idx + 1) / len(queue_list))
+
+                st.success(
+                    f"🎉 Successfully scheduled {success_count}/{len(queue_list)}"
+                    " reminders to your Buffer queue! (Announcement post excluded)"
+                )
+
+            st.divider()
+            st.markdown("### 🐦 Preview Scheduled Timeline & Calendar Actions")
+            for title, post_time, content in st.session_state["active_cup_tweets"]:
+                with st.expander(f"{title} — *Scheduled: {post_time}*"):
+                    st.code(content, language="text")
+                    col_x, col_cal = st.columns(2)
+                    with col_x:
+                        x_url = get_x_intent_url(content)
+                        st.link_button(f"🌐 Post on X", x_url, use_container_width=True)
+                    with col_cal:
+                        dt_event = parse_to_datetime(post_time)
+                        if dt_event:
+                            cal_url = get_gcal_url(f"{cup_m_name} (H): {title}", dt_event, content)
+                            st.link_button(
+                                "📅 Add to Google Calendar",
+                                cal_url,
+                                use_container_width=True,
+                            )
+
+
+# ==========================================
+# TAB 3: LEAGUE AWAYS
+# ==========================================
+with tab3:
+    with st.container(border=True):
+        away_url = st.text_input(
+            "🔗 Ticket Page URL (Away):",
+            placeholder="https://www.liverpoolfc.com/tickets/...",
+            key="away_url",
+        )
+        if st.button("Scan Away Page 🔍", use_container_width=True, key="away_scan"):
+            if not away_url:
+                st.error("Please provide the URL.")
+            else:
+                status_placeholder = st.empty()
+                progress_bar = st.progress(0)
+                try:
+                    headers = {
+                        "User-Agent": (
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                        )
+                    }
+                    response = requests.get(away_url, headers=headers, timeout=10)
+                    soup = BeautifulSoup(response.text, "html.parser")
+                    for script in soup(["script", "style", "nav", "footer", "header"]):
+                        script.extract()
+                    page_text = " ".join(soup.get_text().split())[:35000]
+
+                    genai.configure(api_key=api_key)
+                    model = genai.GenerativeModel("gemini-2.5-flash")
+
+                    max_attempts = 10
+                    best_data = None
+                    least_tbas = 999
+
+                    for attempt in range(1, max_attempts + 1):
+                        status_placeholder.info(
+                            f"⏳ Scanning Away details (Attempt {attempt}/{max_attempts})..."
+                        )
+                        progress_bar.progress(attempt / max_attempts)
+
+                        prompt = f"""
+                        Analyze this raw text from an LFC Away match ticket page. Exclude disabled/wheelchair sales.
+                        Extract opponent name, sales tiers with open/close times, and forwarding deadline.
+                        DO NOT return 'TBA' if the date exists anywhere in the text.
+
+                        Desired JSON Format:
+                        {{
+                          "match_name": "Lask",
+                          "sales": [
+                            {{"tier": "9+ Away Credit Balance", "open": "Day Date, Time", "close": "Day Date, Time"}}
+                          ],
+                          "forwarding_deadline": "Day Date, Time",
+                          "match_date": "Day Date, Time"
+                        }}
+                        Source Text: {page_text}
+                        """
+                        ai_response = model.generate_content(prompt)
+                        cleaned_json = (
+                            ai_response.text.strip()
+                            .replace("```json", "")
+                            .replace("```", "")
+                            .strip()
+                        )
+                        extracted = json.loads(cleaned_json)
+
+                        tba_count = 0
+                        core_fields = ["match_name", "forwarding_deadline", "match_date"]
+                        for field in core_fields:
+                            val = str(extracted.get(field, "TBA")).upper()
+                            if "TBA" in val or not val.strip():
+                                tba_count += 1
+
+                        sales = extracted.get("sales", [])
+                        if not sales or any(
+                            "TBA" in str(s.get("open", "TBA")).upper() for s in sales
+                        ):
+                            tba_count += 1
+
+                        if tba_count < least_tbas:
+                            least_tbas = tba_count
+                            best_data = extracted
+
+                        if tba_count == 0:
+                            status_placeholder.success(
+                                f"✅ All fields identified on attempt {attempt}!"
+                            )
+                            break
+
+                    st.session_state.away_data = best_data
+                    progress_bar.empty()
+                    if least_tbas == 0:
+                        st.toast("✅ Away data successfully extracted with 0 TBAs!")
+                    else:
+                        status_placeholder.warning(
+                            f"Extracted best match ({least_tbas} unlisted/TBA fields after"
+                            f" {max_attempts} attempts)."
+                        )
+
+                except Exception as e:
+                    st.error(f"Failed to automatically pull details: {e}")
+
+    if st.session_state.away_data:
+        st.write("")
+        st.subheader("⚙️ Refine Details")
+        ad = st.session_state.away_data
+
+        with st.container(border=True):
+            away_m_name = st.text_input(
+                "Opponent Team Name",
+                value=ad.get("match_name", ""),
+                key="away_m_name",
+            )
+            away_fwd = editable_date_row(
+                "Forwarding Deadline", ad.get("forwarding_deadline", "TBA"), "away_fwd"
+            )
+
+        with st.container(border=True):
+            st.markdown("#### 🎟️ Tiered Sales")
+            edited_away_sales = []
+            for i, sale in enumerate(ad.get("sales", [])):
+                with st.expander(
+                    f"Sale Tier {i+1} ({sale.get('tier', 'Unknown')})", expanded=True
+                ):
+                    t_name = st.text_input(
+                        "Criteria", value=sale.get("tier", ""), key=f"away_tier_name_{i}"
+                    )
+                    t_open = editable_date_row(
+                        "Opens", sale.get("open", ""), f"away_tier_open_{i}"
+                    )
+                    t_close = editable_date_row(
+                        "Closes", sale.get("close", ""), f"away_tier_close_{i}"
+                    )
+                    edited_away_sales.append(
+                        {"tier": t_name, "open": t_open, "close": t_close}
+                    )
+
+        with st.container(border=True):
+            st.markdown("#### 🏟️ Match Details")
+            away_m_date = editable_date_row(
+                "Match Date & Time", ad.get("match_date", ""), "away_m_date"
+            )
+
+        st.write("")
+        if st.button(
+            "Generate Away Tweet Timelines & Calendars 🚀",
+            type="primary",
+            use_container_width=True,
+            key="away_gen",
+        ):
+            announcement_blocks = []
+            for s in edited_away_sales:
+                announcement_blocks.append(
+                    f"Sale ({s['tier']})\n• Opens: {s['open']}\n• Closes: {s['close']}"
+                )
+            sales_blocks_text = "\n\n".join(announcement_blocks)
+
+            announcement_tweet = f"""{away_m_name} (A) - Sale Details 📢\n\n{sales_blocks_text}\n\nMatch Date • {away_m_date} 🏟️"""
+
+            away_tweets = [(
+                "📢 Sales Detail Announcement",
+                "Immediate / Upon Scanning",
+                announcement_tweet,
+            )]
+
+            for s in edited_away_sales:
+                sale_tweet = f"""{away_m_name} (A) 🎟️\n\nSale ({s['tier']})\n• Opens: {s['open']}\n• Closes: {s['close']}\n• Guaranteed Sale"""
+                away_tweets.append((
+                    f"🎟️ Sale Reminder ({s['tier']})",
+                    get_offset_time(s["open"], hours_before=1),
+                    sale_tweet,
+                ))
+
+            if away_fwd != "TBA":
+                fwd_tweet = f"""Forwarding Deadline ➡️\n• Closes: {away_fwd}"""
+                away_tweets.append((
+                    "➡️ Forwarding Deadline Reminder",
+                    get_offset_time(away_fwd, hours_before=1),
+                    fwd_tweet,
+                ))
+
+            st.session_state["active_away_tweets"] = away_tweets
+
+    if (
+        "active_away_tweets" in st.session_state
+        and st.session_state["active_away_tweets"]
+    ):
+        with st.container(border=True):
+            st.markdown("### 📅 Add All Events to Calendar")
+
+            away_events = [
+                (
+                    f"Liverpool at {away_m_name} (A)",
+                    parse_to_datetime(away_m_date),
+                    f"Away match: {away_m_date}",
+                    False,
+                ),
+                (
+                    f"{away_m_name} - Forwarding Deadline",
+                    parse_to_datetime(away_fwd),
+                    f"Forwarding closes for {away_m_name} away",
+                    False,
+                ),
+            ]
+            for s in edited_away_sales:
+                away_events.append((
+                    f"{away_m_name} - {s['tier']} Sale Opens",
+                    parse_to_datetime(s["open"]),
+                    f"Away ticket sale opens for {s['tier']}",
+                    False,
+                ))
+                if s.get("close") and s["close"] != "TBA":
+                    away_events.append((
+                        f"{away_m_name} - {s['tier']} Sale Closes",
+                        parse_to_datetime(s["close"]),
+                        f"Away ticket sale closes for {s['tier']}",
+                        False,
+                    ))
+
+            master_away_date = parse_to_datetime(away_m_date)
+            if master_away_date:
+                master_away_url = get_gcal_url(
+                    f"Liverpool at {away_m_name} (A) - Ticket Details & Matchday",
+                    master_away_date,
+                    announcement_tweet,
+                )
+                st.link_button(
+                    f"📅 Add All {away_m_name} Away Details to Google Calendar"
+                    " (Master Event)",
+                    master_away_url,
+                    use_container_width=True,
+                )
+
+            ics_away_data = generate_fixture_ics(away_m_name, away_events)
+            st.download_button(
+                label=f"📥 Download All {away_m_name} Events to Calendar (.ics)",
+                data=ics_away_data,
+                file_name=f"{away_m_name.lower()}_away_all_events.ics",
+                mime="text/calendar",
+                use_container_width=True,
+            )
+
+            st.caption(
+                "Or click an individual event to add directly to Google Calendar:"
+            )
+            c1, c2 = st.columns(2)
+            for idx, (title, dt, desc, is_all_day) in enumerate(away_events):
+                if dt:
+                    target_col = c1 if idx % 2 == 0 else c2
+                    with target_col:
+                        st.link_button(
+                            f"📅 {title}",
+                            get_gcal_url(title, dt, desc, is_all_day),
+                            use_container_width=True,
+                        )
+
+        with st.container(border=True):
+            st.markdown("### ⚡ Buffer Automation")
+
+            if st.button(
+                "🚀 Schedule All Reminders to Buffer Queue",
+                type="primary",
+                use_container_width=True,
+                key="buffer_schedule_action_away",
+            ):
+                progress_bar = st.progress(0)
+                success_count = 0
+                active_list = st.session_state["active_away_tweets"]
+
+                queue_list = [
+                    t
+                    for t in active_list
+                    if "Sales Detail Announcement" not in t[0]
+                    and "Sales Details Announcement" not in t[0]
+                ]
+
+                for idx, (title, post_time_str, content) in enumerate(queue_list):
+                    dt_target = parse_to_datetime(post_time_str)
+                    if not dt_target or "Immediate" in post_time_str:
+                        dt_target = datetime.now() + timedelta(minutes=2)
+
+                    ok, msg = schedule_to_buffer(content, dt_target)
+                    if ok:
+                        success_count += 1
+                    else:
+                        st.error(f"Failed to queue '{title}': {msg}")
+
+                    progress_bar.progress((idx + 1) / len(queue_list))
+
+                st.success(
+                    f"🎉 Successfully scheduled {success_count}/{len(queue_list)}"
+                    " reminders to your Buffer queue! (Announcement post excluded)"
+                )
+
+            st.divider()
+            st.markdown("### 🐦 Preview Scheduled Timeline & Calendar Actions")
+            for title, post_time, content in st.session_state["active_away_tweets"]:
+                with st.expander(f"{title} — *Scheduled: {post_time}*"):
+                    st.code(content, language="text")
+                    col_x, col_cal = st.columns(2)
+                    with col_x:
+                        x_url = get_x_intent_url(content)
+                        st.link_button(f"🌐 Post on X", x_url, use_container_width=True)
+                    with col_cal:
+                        dt_event = parse_to_datetime(post_time)
+                        if dt_event:
+                            cal_url = get_gcal_url(
+                                f"{away_m_name} (A): {title}", dt_event, content
+                            )
+                            st.link_button(
+                                "📅 Add to Google Calendar",
+                                cal_url,
+                                use_container_width=True,
+                            )
+
+
+# ==========================================
+# TAB 4: CHAMPIONS LEAGUE AWAYS
+# ==========================================
+with tab4:
+    with st.container(border=True):
+        cl_url = st.text_input(
+            "🔗 Ticket Page URL (CL Away):",
+            placeholder="https://www.liverpoolfc.com/tickets/...",
+            key="cl_url",
+        )
+
+        if st.button("Scan CL Away Page 🔍", use_container_width=True, key="cl_scan"):
+            if not cl_url:
+                st.error("Please provide the URL.")
+            else:
+                status_placeholder = st.empty()
+                progress_bar = st.progress(0)
+                try:
+                    headers = {
+                        "User-Agent": (
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                        )
+                    }
+                    response = requests.get(cl_url, headers=headers, timeout=10)
+                    soup = BeautifulSoup(response.text, "html.parser")
+                    for script in soup(["script", "style", "nav", "footer", "header"]):
+                        script.extract()
+                    page_text = " ".join(soup.get_text().split())[:35000]
+
+                    genai.configure(api_key=api_key)
+                    model = genai.GenerativeModel("gemini-2.5-flash")
+
+                    max_attempts = 10
+                    best_data = None
+                    least_tbas = 999
+
+                    for attempt in range(1, max_attempts + 1):
+                        status_placeholder.info(
+                            f"⏳ Scanning CL Away details (Attempt {attempt}/{max_attempts})..."
+                        )
+                        progress_bar.progress(attempt / max_attempts)
+
+                        prompt = f"""
+                        Analyze this raw text from an LFC Champions League / European Away match ticket page. Exclude disabled/wheelchair sales.
+                        Extract opponent name, match date, and sales tiers.
+                        CRITICAL INSTRUCTIONS:
+                        1. For 'tier', simplify the criteria name to something clean like '9+ Games' or '9+ Away Credit Balance'.
+                        2. Look inside EACH sale section for the sentence mentioning 'Forwarding Deadline' and extract its exact date and time into 'forwarding_deadline' for that tier.
+                        3. For 'info', extract whether it states 'Guaranteed Sale' (or 'guaranteed'), 'Subject to availability', or leave empty if not stated.
+                        DO NOT return 'TBA' if the date exists anywhere in the text.
+
+                        Desired JSON Format:
+                        {{
+                          "match_name": "LASK",
+                          "sales": [
+                            {{
+                              "tier": "9+ Games",
+                              "open": "Wed 23 Sep, 8:15am",
+                              "close": "Thu 24 Sep, 7:30am",
+                              "info": "Guaranteed Sale",
+                              "forwarding_deadline": "Thu 24 Sep, 11:00am"
+                            }}
+                          ],
+                          "match_date": "Wed 14 Oct, 5:45pm"
+                        }}
+                        Source Text: {page_text}
+                        """
+                        ai_response = model.generate_content(prompt)
+                        cleaned_json = (
+                            ai_response.text.strip()
+                            .replace("```json", "")
+                            .replace("```", "")
+                            .strip()
+                        )
+                        extracted = json.loads(cleaned_json)
+
+                        tba_count = 0
+                        core_fields = ["match_name", "match_date"]
+                        for field in core_fields:
+                            val = str(extracted.get(field, "TBA")).upper()
+                            if "TBA" in val or not val.strip():
+                                tba_count += 1
+
+                        sales = extracted.get("sales", [])
+                        if not sales:
+                            tba_count += 1
+                        else:
+                            for s in sales:
+                                if "TBA" in str(s.get("open", "TBA")).upper():
+                                    tba_count += 1
+                                if "TBA" in str(s.get("forwarding_deadline", "TBA")).upper():
+                                    tba_count += 1
+
+                        if tba_count < least_tbas:
+                            least_tbas = tba_count
+                            best_data = extracted
+
+                        if tba_count == 0:
+                            status_placeholder.success(
+                                f"✅ All fields identified on attempt {attempt}!"
+                            )
+                            break
+
+                    st.session_state.cl_away_data = best_data
+                    progress_bar.empty()
+                    if least_tbas == 0:
+                        st.toast("✅ CL Away data successfully extracted with 0 TBAs!")
+                    else:
+                        status_placeholder.warning(
+                            f"Extracted best match ({least_tbas} unlisted/TBA fields after"
+                            f" {max_attempts} attempts)."
+                        )
+
+                except Exception as e:
+                    st.error(f"Failed to automatically pull details: {e}")
+
+    if st.session_state.cl_away_data:
+        st.write("")
+        st.subheader("⚙️ Refine Details")
+        cld = st.session_state.cl_away_data
+
+        with st.container(border=True):
+            cl_m_name = st.text_input(
+                "Opponent Team Name",
+                value=cld.get("match_name", ""),
+                key="cl_m_name",
+            )
+
+        with st.container(border=True):
+            st.markdown("#### 🎟️ Tiered Sales & Forwarding Deadlines")
+            edited_cl_sales = []
+            for i, sale in enumerate(cld.get("sales", [])):
+                with st.expander(
+                    f"Sale Tier {i+1} ({sale.get('tier', 'Unknown')})", expanded=True
+                ):
+                    t_name = st.text_input(
+                        "Criteria", value=sale.get("tier", ""), key=f"cl_tier_name_{i}"
+                    )
+                    t_open = editable_date_row(
+                        "Opens", sale.get("open", ""), f"cl_tier_open_{i}"
+                    )
+                    t_close = editable_date_row(
+                        "Closes", sale.get("close", ""), f"cl_tier_close_{i}"
+                    )
+                    t_info = st.text_input(
+                        "Information / Guarantee",
+                        value=sale.get("info", ""),
+                        key=f"cl_tier_info_{i}",
+                    )
+                    t_fwd = editable_date_row(
+                        "Forwarding Deadline",
+                        sale.get("forwarding_deadline", "TBA"),
+                        f"cl_tier_fwd_{i}",
+                    )
+                    edited_cl_sales.append({
+                        "tier": t_name,
+                        "open": t_open,
+                        "close": t_close,
+                        "info": t_info,
+                        "forwarding_deadline": t_fwd,
+                    })
+
+        with st.container(border=True):
+            cl_m_date = editable_date_row(
+                "Match Date & Time", cld.get("match_date", ""), "cl_m_date"
+            )
+
+        st.write("")
+        if st.button(
+            "Generate CL Away Tweet Timelines & Calendars 🚀",
+            type="primary",
+            use_container_width=True,
+            key="cl_gen",
+        ):
+            announcement_blocks = []
+            for s in edited_cl_sales:
+                info_tag = ""
+                if (
+                    "guaranteed" in s["info"].lower()
+                    and "non" not in s["info"].lower()
+                ):
+                    info_tag = " - Guaranteed"
+                elif s["info"].strip():
+                    info_tag = f" - {s['info'].strip()}"
+
+                tier_label = s["tier"]
+                announcement_blocks.append(
+                    f"Sale ({tier_label}{info_tag})\n• Opens: {s['open']}\n• Closes:"
+                    f" {s['close']}"
+                )
+
+            sales_blocks_text = "\n\n".join(announcement_blocks)
+            cl_announcement_tweet = f"""{cl_m_name} (A) - Sale Details 📢\n\n{sales_blocks_text}\n\nMatch Date • {cl_m_date} 🏟️"""
+
+            cl_tweets = [(
+                "📢 CL Away Sales Details Announcement",
+                "Immediate / Upon Scanning",
+                cl_announcement_tweet,
+            )]
+
+            for s in edited_cl_sales:
+                open_time_part = (
+                    s["open"].split(", ")[-1] if ", " in s["open"] else s["open"]
+                )
+
+                info_line = ""
+                if s["info"].strip():
+                    info_line = f"• {s['info'].strip()}\n"
+
+                fwd_deadline_text = (
+                    s["forwarding_deadline"].replace(",", " -")
+                    if "," in s["forwarding_deadline"]
+                    else s["forwarding_deadline"]
+                )
+
+                sale_tweet = f"""{cl_m_name} (A) 🎟️\n\nSale ({s['tier']})\n• Opens: Today - {open_time_part}\n• Closes: {s['close'].replace(',', ' -')}\n{info_line}\nForwarding Deadline ➡️\n• Closes: {fwd_deadline_text}"""
+
+                cl_tweets.append((
+                    f"🎟️ Sale Reminder ({s['tier']})",
+                    get_offset_time(s["open"], hours_before=1),
+                    sale_tweet,
+                ))
+
+            st.session_state["active_cl_tweets"] = cl_tweets
+
+    if (
+        "active_cl_tweets" in st.session_state
+        and st.session_state["active_cl_tweets"]
+    ):
+        with st.container(border=True):
+            st.markdown("### 📅 Add All Events to Calendar")
+
+            cl_events = [(
+                f"Liverpool at {cl_m_name} (CL Away)",
+                parse_to_datetime(cl_m_date),
+                f"European Away Match: {cl_m_date}",
+                False,
+            )]
+            for s in edited_cl_sales:
+                cl_events.append((
+                    f"{cl_m_name} (A) - {s['tier']} Sale Opens",
+                    parse_to_datetime(s["open"]),
+                    f"European Away Ticket Sale - {s['tier']}",
+                    False,
+                ))
+                if s.get("close") and s["close"] != "TBA":
+                    cl_events.append((
+                        f"{cl_m_name} (A) - {s['tier']} Sale Closes",
+                        parse_to_datetime(s["close"]),
+                        f"European Away Ticket Sale Closes - {s['tier']}",
+                        False,
+                    ))
+                if (
+                    s.get("forwarding_deadline")
+                    and s["forwarding_deadline"] != "TBA"
+                ):
+                    cl_events.append((
+                        f"{cl_m_name} (A) - {s['tier']} Forwarding Deadline",
+                        parse_to_datetime(s["forwarding_deadline"]),
+                        f"Forwarding closes for {s['tier']}",
+                        False,
+                    ))
+
+            master_cl_date = parse_to_datetime(cl_m_date)
+            if master_cl_date:
+                master_cl_url = get_gcal_url(
+                    f"Liverpool at {cl_m_name} (CL Away) - European Ticket Schedule &"
+                    " Matchday",
+                    master_cl_date,
+                    cl_announcement_tweet,
+                )
+                st.link_button(
+                    f"📅 Add All {cl_m_name} European Away Details to Google Calendar"
+                    " (Master Event)",
+                    master_cl_url,
+                    use_container_width=True,
+                )
+
+            ics_cl_data = generate_fixture_ics(cl_m_name, cl_events)
+            st.download_button(
+                label=f"📥 Download All {cl_m_name} Events to Calendar (.ics)",
+                data=ics_cl_data,
+                file_name=f"{cl_m_name.lower()}_cl_all_events.ics",
+                mime="text/calendar",
+                use_container_width=True,
+            )
+
+            st.caption(
+                "Or click an individual event to add directly to Google Calendar:"
+            )
+            c1, c2 = st.columns(2)
+            for idx, (title, dt, desc, is_all_day) in enumerate(cl_events):
+                if dt:
+                    target_col = c1 if idx % 2 == 0 else c2
+                    with target_col:
+                        st.link_button(
+                            f"📅 {title}",
+                            get_gcal_url(title, dt, desc, is_all_day),
+                            use_container_width=True,
+                        )
+
+        with st.container(border=True):
+            st.markdown("### ⚡ Buffer Automation")
+
+            if st.button(
+                "🚀 Schedule All Reminders to Buffer Queue",
+                type="primary",
+                use_container_width=True,
+                key="buffer_schedule_action_cl",
+            ):
+                progress_bar = st.progress(0)
+                success_count = 0
+                active_list = st.session_state["active_cl_tweets"]
+
+                queue_list = [
+                    t
+                    for t in active_list
+                    if "Sales Detail Announcement" not in t[0]
+                    and "Sales Details Announcement" not in t[0]
+                ]
+
+                for idx, (title, post_time_str, content) in enumerate(queue_list):
+                    dt_target = parse_to_datetime(post_time_str)
+                    if not dt_target or "Immediate" in post_time_str:
+                        dt_target = datetime.now() + timedelta(minutes=2)
+
+                    ok, msg = schedule_to_buffer(content, dt_target)
+                    if ok:
+                        success_count += 1
+                    else:
+                        st.error(f"Failed to queue '{title}': {msg}")
+
+                    progress_bar.progress((idx + 1) / len(queue_list))
+
+                st.success(
+                    f"🎉 Successfully scheduled {success_count}/{len(queue_list)}"
+                    " reminders to your Buffer queue! (Announcement post excluded)"
+                )
+
+            st.divider()
+            st.markdown("### 🐦 Preview Scheduled Timeline & Calendar Actions")
+            for title, post_time, content in st.session_state["active_cl_tweets"]:
+                with st.expander(f"{title} — *Scheduled: {post_time}*"):
+                    st.code(content, language="text")
+                    col_x, col_cal = st.columns(2)
+                    with col_x:
+                        x_url = get_x_intent_url(content)
+                        st.link_button(f"🌐 Post on X", x_url, use_container_width=True)
+                    with col_cal:
+                        dt_event = parse_to_datetime(post_time)
+                        if dt_event:
+                            cal_url = get_gcal_url(
+                                f"{cl_m_name} (A): {title}", dt_event, content
+                            )
+                            st.link_button(
+                                "📅 Add to Google Calendar",
+                                cal_url,
+                                use_container_width=True,
+                            )
