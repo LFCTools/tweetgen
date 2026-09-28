@@ -108,7 +108,7 @@ def format_gcal_date(dt, is_all_day=False):
         return f"{date_only}/{end_date_only}"
     else:
         start_iso = dt.strftime("%Y%m%dT%H%M%S")
-        end_iso = (dt + timedelta(hours=1)).strftime("%Y%m%dT%H%M%S") # FIXED: distinct end time prevents GCal errors
+        end_iso = (dt + timedelta(hours=1)).strftime("%Y%m%dT%H%M%S")
         return f"{start_iso}/{end_iso}"
 
 def get_offset_time(date_str, hours_before=1):
@@ -129,8 +129,30 @@ def get_x_intent_url(text):
     encoded_text = urllib.parse.quote(text)
     return f"https://twitter.com/intent/tweet?text={encoded_text}"
 
+def shorten_tier_name(tier_str):
+    """Shortens lengthy ticketing criteria into clean, compact labels."""
+    t_lower = tier_str.lower()
+    if any(kw in t_lower for kw in ["wheelchair", "ambulant", "disabled"]):
+        return None # Flag for filtering out
+    
+    # Extract numbers if credit balance or games are mentioned
+    num_match = re.search(r'(\d+)', tier_str)
+    num = num_match.group(1) if num_match else ""
+
+    if "credit balance" in t_lower or "match credit" in t_lower or "games" in t_lower:
+        if num:
+            return f"{num}+ Credit Balance"
+    
+    if "all members" in t_lower:
+        return "All Members"
+    if "season ticket" in t_lower:
+        return "Season Ticket Holders"
+    
+    # Fallback cleanup if no specific match
+    cleaned = re.sub(r'(Season Ticket Holders and All Red Members with a.*?Balance of)', '', tier_str, flags=re.IGNORECASE).strip()
+    return cleaned if cleaned else tier_str
+
 def get_hallmap_link(opponent_name):
-    """Returns the precise hallmap link based on the opponent team."""
     hallmap_mapping = {
         "manchester city": "https://ticketing.liverpoolfc.com/en-GB/events/liverpool%20v%20manchester%20city/2026-10-10_15.00/anfield?hallmap",
         "brighton": "https://ticketing.liverpoolfc.com/en-GB/events/liverpool%20v%20brighton%20-%20hove%20albion/2026-10-24_15.00/anfield?hallmap",
@@ -158,7 +180,6 @@ def get_hallmap_link(opponent_name):
 
 # --- MOBILE-OPTIMIZED UI WIDGET ---
 def editable_date_row(label, default_val, key):
-    """Creates a single-line toggle that drops down editing tools when active."""
     if f"{key}_default" not in st.session_state or st.session_state[f"{key}_default"] != default_val:
         st.session_state[f"{key}_default"] = default_val
         dt_obj = parse_to_datetime(default_val)
@@ -205,12 +226,7 @@ except KeyError:
     st.error("⚠️ GEMINI_API_KEY is missing from Streamlit Secrets. Please add it to your dashboard to continue.")
     st.stop()
 
-if "pl_data" not in st.session_state: st.session_state.pl_data = None
-if "cup_data" not in st.session_state: st.session_state.cup_data = None
-if "away_data" not in st.session_state: st.session_state.away_data = None
-if "cl_away_data" not in st.session_state: st.session_state.cl_away_data = None
-
-for state_key in ['active_pl_tweets', 'active_cup_tweets', 'active_away_tweets', 'active_cl_tweets']:
+for state_key in ['pl_data', 'cup_data', 'away_data', 'cl_away_data', 'active_pl_tweets', 'active_cup_tweets', 'active_away_tweets', 'active_cl_tweets']:
     if state_key not in st.session_state:
         st.session_state[state_key] = None
 
@@ -246,8 +262,9 @@ with tab1:
                         
                         prompt = f"""
                         Analyze the following raw text from an LFC Premier League ticket page. 
-                        CRITICAL INSTRUCTION FOR 'links_sent': Look inside the 'TICKET SALE' or sale details section for sentences mentioning 'unique link' (e.g., 'Eligible supporters will be sent a unique link on Friday 2 October...'). Extract that exact date/time.
-                        Extract unified registration details, local & YA ballot open/close/results dates, and ticket sale opening dates per tier (e.g. 4+ Members, All Members).
+                        CRITICAL INSTRUCTION: Exclude any sales tiers mentioning wheelchair, ambulant, or disabled access.
+                        CRITICAL INSTRUCTION FOR 'links_sent': Look inside the 'TICKET SALE' or sale details section for sentences mentioning 'unique link'. Extract that exact date/time.
+                        Extract unified registration details, local & YA ballot open/close/results dates, and ticket sale opening dates per tier.
                         Respond ONLY with a valid raw JSON object matching these exact keys. 
                         Use abbreviated days (e.g., Wed) and months (e.g., Nov) and format times like 10:00am or 11:00am.
                         If any field is missing, make its value "TBA".
@@ -294,8 +311,10 @@ with tab1:
             edited_pl_sales = []
             sales_list = d.get("sales", [])
             for i, sale in enumerate(sales_list):
-                with st.expander(f"Sale Tier {i+1} ({sale.get('tier', 'Unknown')})", expanded=True):
-                    t_name = st.text_input(f"Criteria", value=sale.get("tier", ""), key=f"pl_tier_name_{i}")
+                short_name = shorten_tier_name(sale.get("tier", ""))
+                if not short_name: continue # Skip accessibility
+                with st.expander(f"Sale Tier {i+1} ({short_name})", expanded=True):
+                    t_name = st.text_input("Criteria", value=short_name, key=f"pl_tier_name_{i}")
                     t_open = editable_date_row("Sale Opens", sale.get("open", ""), f"pl_tier_open_{i}")
                     t_close = editable_date_row("Closes", sale.get("close", "TBA"), f"pl_tier_close_{i}")
                     edited_pl_sales.append({"tier": t_name, "open": t_open, "close": t_close})
@@ -314,8 +333,7 @@ with tab1:
         if st.button("Generate PL Tweet Timelines & Calendars 🚀", type="primary", use_container_width=True, key="pl_gen"):
             sales_text_announcement = ""
             for s in edited_pl_sales:
-                tier_label = "Sale (4+ Only)" if "4+" in s['tier'] else s['tier']
-                sales_text_announcement += f"• {tier_label}: {s['open']}\n"
+                sales_text_announcement += f"• {s['tier']}: {s['open']}\n"
 
             announcement_tweet = f"""{pl_m_name} (H) - Sale Details 📢
 
@@ -398,10 +416,9 @@ Comment below if successful 👇"""
             for s in edited_pl_sales:
                 rem_time = get_offset_time(s['open'], hours_before=1)
                 link_time = get_offset_time(s['open'], hours_before=0.5)
-                tier_display = "Sale (4+ Only)" if "4+" in s['tier'] else f"{s['tier']} Sale"
-                rem_tweet = f"""{pl_m_name} (H) - {tier_display} 📢
+                rem_tweet = f"""{pl_m_name} (H) - {s['tier']} 📢
 
-{tier_display} 🎟️
+{s['tier']} 🎟️
 • Opens: {s['open']}
 • Click unique links from {link_time}
 
@@ -487,7 +504,8 @@ with tab2:
                         genai.configure(api_key=api_key)
                         model = genai.GenerativeModel('gemini-2.5-flash')
                         prompt = f"""
-                        Analyze the following raw text from an LFC Cup match ticket page. Extract opponent name, sales tiers with open/close times, local ballot dates, and ACS dates.
+                        Analyze the following raw text from an LFC Cup match ticket page. Exclude any wheelchair, ambulant, or disabled sales tiers.
+                        Extract opponent name, sales tiers with open/close times, local ballot dates, and ACS dates.
                         Respond ONLY with a valid raw JSON object matching the structure below. 
                         Use abbreviated days (e.g., Wed) and months (e.g., Nov) and format times like 10:00am or 11:00am.
                         If any field is missing, make its value "TBA".
@@ -524,8 +542,10 @@ with tab2:
             st.markdown("#### 🎟️ Tiered Sales")
             edited_cup_sales = []
             for i, sale in enumerate(cd.get("sales", [])):
-                with st.expander(f"Sale Tier {i+1} ({sale.get('tier', 'Unknown')})", expanded=True):
-                    t_name = st.text_input("Criteria", value=sale.get("tier", ""), key=f"cup_tier_name_{i}")
+                short_name = shorten_tier_name(sale.get("tier", ""))
+                if not short_name: continue
+                with st.expander(f"Sale Tier {i+1} ({short_name})", expanded=True):
+                    t_name = st.text_input("Criteria", value=short_name, key=f"cup_tier_name_{i}")
                     t_open = editable_date_row("Opens", sale.get("open", ""), f"cup_tier_open_{i}")
                     t_close = editable_date_row("Closes", sale.get("close", ""), f"cup_tier_close_{i}")
                     edited_cup_sales.append({"tier": t_name, "open": t_open, "close": t_close})
@@ -633,7 +653,7 @@ with tab3:
                         genai.configure(api_key=api_key)
                         model = genai.GenerativeModel('gemini-2.5-flash')
                         prompt = f"""
-                        Analyze the following raw text from an LFC Away match ticket page. Exclude any disabled/wheelchair/ambulant sales. 
+                        Analyze the following raw text from an LFC Away match ticket page. Exclude any wheelchair, ambulant, or disabled sales tiers. 
                         Extract opponent name, sales tiers with open/close times, and forwarding deadline if present.
                         Respond ONLY with a valid raw JSON object matching the structure below. 
                         Use abbreviated days (e.g., Wed) and months (e.g., Nov) and format times like 10:00am or 11:00am.
@@ -670,8 +690,10 @@ with tab3:
             st.markdown("#### 🎟️ Tiered Sales")
             edited_away_sales = []
             for i, sale in enumerate(ad.get("sales", [])):
-                with st.expander(f"Sale Tier {i+1} ({sale.get('tier', 'Unknown')})", expanded=True):
-                    t_name = st.text_input(f"Criteria", value=sale.get("tier", ""), key=f"away_tier_name_{i}")
+                short_name = shorten_tier_name(sale.get("tier", ""))
+                if not short_name: continue
+                with st.expander(f"Sale Tier {i+1} ({short_name})", expanded=True):
+                    t_name = st.text_input(f"Criteria", value=short_name, key=f"away_tier_name_{i}")
                     t_open = editable_date_row("Opens", sale.get("open", ""), f"away_tier_open_{i}")
                     t_close = editable_date_row("Closes", sale.get("close", ""), f"away_tier_close_{i}")
                     edited_away_sales.append({"tier": t_name, "open": t_open, "close": t_close})
@@ -776,7 +798,7 @@ with tab4:
                         model = genai.GenerativeModel('gemini-2.5-flash')
                         
                         prompt = f"""
-                        Analyze the following raw text from an LFC Champions League / European Away match ticket page. Exclude any disabled/wheelchair/ambulant sales.
+                        Analyze the following raw text from an LFC Champions League / European Away match ticket page. Exclude any wheelchair, ambulant, or disabled sales tiers.
                         Extract opponent name, match date, and sales tiers.
                         CRITICAL INSTRUCTIONS:
                         1. For 'tier', simplify the criteria name to something clean like '9+ Games' or '9+ Away Credit Balance' (e.g., if it says 'with a European Away Match Credit Balance of 9 or more', make tier '9+ Games').
@@ -823,8 +845,10 @@ with tab4:
             st.markdown("#### 🎟️ Tiered Sales & Forwarding Deadlines")
             edited_cl_sales = []
             for i, sale in enumerate(cld.get("sales", [])):
-                with st.expander(f"Sale Tier {i+1} ({sale.get('tier', 'Unknown')})", expanded=True):
-                    t_name = st.text_input(f"Criteria", value=sale.get("tier", ""), key=f"cl_tier_name_{i}")
+                short_name = shorten_tier_name(sale.get("tier", ""))
+                if not short_name: continue
+                with st.expander(f"Sale Tier {i+1} ({short_name})", expanded=True):
+                    t_name = st.text_input(f"Criteria", value=short_name, key=f"cl_tier_name_{i}")
                     t_open = editable_date_row("Opens", sale.get("open", ""), f"cl_tier_open_{i}")
                     t_close = editable_date_row("Closes", sale.get("close", ""), f"cl_tier_close_{i}")
                     t_info = st.text_input("Information / Guarantee", value=sale.get("info", ""), key=f"cl_tier_info_{i}")
