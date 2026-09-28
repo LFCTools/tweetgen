@@ -369,7 +369,7 @@ Sale 🎟️
             now = datetime.now()
             is_today_close = reg_close_dt and reg_close_dt.date() == now.date()
             reg_close_time_str = reg_close_dt.strftime("%I:%M%p").lstrip("0").lower() if reg_close_dt else pl_r_close
-            reg_close_label = f"Today {reg_close_time_str}" if is_today_close else pl_r_close
+            reg_close_label = f"Today, {reg_close_time_str}" if is_today_close else pl_r_close
 
             reg_close_tweet = f"""{pl_m_name} (H) - Registration 📢
 
@@ -395,7 +395,7 @@ https://ticketing.liverpoolfc.com/tickets/ballots"""
             ballots_close_dt = parse_to_datetime(pl_b_close)
             is_ballots_today = ballots_close_dt and ballots_close_dt.date() == now.date()
             ballots_close_time_str = ballots_close_dt.strftime("%I:%M%p").lstrip("0").lower() if ballots_close_dt else pl_b_close
-            ballots_close_label = f"Today {ballots_close_time_str}" if is_ballots_today else pl_b_close
+            ballots_close_label = f"Today, {ballots_close_time_str}" if is_ballots_today else pl_b_close
 
             ballots_close_tweet = f"""{pl_m_name} (H) - Ballots 📢
 
@@ -449,9 +449,12 @@ Hallmap link  👇
 
                 if s.get("close") and s["close"] != "TBA":
                     close_dt = parse_to_datetime(s['close'])
-                    is_close_today = close_dt and close_dt.date() == now.date()
+                    # Compare closing dt date with the closing reminder's date
+                    close_rem_dt = parse_to_datetime(get_offset_time(s['close'], hours_before=1))
+                    is_close_today = close_dt and close_rem_dt and close_dt.date() == close_rem_dt.date()
+                    
                     close_time_str = close_dt.strftime("%I:%M%p").lstrip("0").lower() if close_dt else s['close']
-                    close_label = f"Today {close_time_str}" if is_close_today else s['close']
+                    close_label = f"Today, {close_time_str}" if is_close_today else s['close']
 
                     close_rem_time = get_offset_time(s['close'], hours_before=1)
                     close_tweet = f"""{pl_m_name} (H) ⏰\n\nSale Closing Reminder ({s['tier']})\n• Closes: {close_label}"""
@@ -622,9 +625,11 @@ with tab2:
 
                 if s.get("close") and s["close"] != "TBA":
                     close_dt = parse_to_datetime(s['close'])
-                    is_close_today = close_dt and close_dt.date() == now.date()
+                    close_rem_dt = parse_to_datetime(get_offset_time(s['close'], hours_before=1))
+                    is_close_today = close_dt and close_rem_dt and close_dt.date() == close_rem_dt.date()
+                    
                     close_time_str = close_dt.strftime("%I:%M%p").lstrip("0").lower() if close_dt else s['close']
-                    close_label = f"Today {close_time_str}" if is_close_today else s['close']
+                    close_label = f"Today, {close_time_str}" if is_close_today else s['close']
 
                     close_rem_time = get_offset_time(s['close'], hours_before=1)
                     close_tweet = f"""{cup_m_name} ({cup_comp}) ⏰\n\nSale Closing Reminder ({s['tier']})\n• Closes: {close_label}"""
@@ -782,9 +787,11 @@ with tab3:
 
                 if s.get("close") and s["close"] != "TBA":
                     close_dt = parse_to_datetime(s['close'])
-                    is_close_today = close_dt and close_dt.date() == now.date()
+                    close_rem_dt = parse_to_datetime(get_offset_time(s['close'], hours_before=1))
+                    is_close_today = close_dt and close_rem_dt and close_dt.date() == close_rem_dt.date()
+                    
                     close_time_str = close_dt.strftime("%I:%M%p").lstrip("0").lower() if close_dt else s['close']
-                    close_label = f"Today {close_time_str}" if is_close_today else s['close']
+                    close_label = f"Today, {close_time_str}" if is_close_today else s['close']
 
                     close_rem_time = get_offset_time(s['close'], hours_before=1)
                     close_tweet = f"""{away_m_name} (A) ⏰\n\nSale Closing Reminder ({s['tier']})\n• Closes: {close_label}"""
@@ -793,9 +800,11 @@ with tab3:
             if away_fwd != "TBA":
                 fwd_rem_time = get_offset_time(away_fwd, hours_before=1)
                 fwd_dt = parse_to_datetime(away_fwd)
-                is_fwd_today = fwd_dt and fwd_dt.date() == now.date()
+                fwd_rem_dt = parse_to_datetime(fwd_rem_time)
+                is_fwd_today = fwd_dt and fwd_rem_dt and fwd_dt.date() == fwd_rem_dt.date()
+                
                 fwd_time_str = fwd_dt.strftime("%I:%M%p").lstrip("0").lower() if fwd_dt else away_fwd
-                fwd_label = f"Today {fwd_time_str}" if is_fwd_today else away_fwd
+                fwd_label = f"Today, {fwd_time_str}" if is_fwd_today else away_fwd
 
                 fwd_tweet = f"""Forwarding Deadline ➡️\n• Closes: {fwd_label}"""
                 away_tweets.append(("➡️ Forwarding Deadline", fwd_rem_time, fwd_tweet))
@@ -972,25 +981,29 @@ with tab4:
                 if s['info'].strip():
                     info_line = f"• {s['info'].strip()}\n"
 
-                fwd_dt = parse_to_datetime(s['forwarding_deadline'])
-                is_fwd_today = fwd_dt and fwd_dt.date() == now.date()
-                fwd_time_str = fwd_dt.strftime("%I:%M%p").lstrip("0").lower() if fwd_dt else s['forwarding_deadline']
-                fwd_label = f"Today {fwd_time_str}" if is_fwd_today else s['forwarding_deadline']
-
-                sale_tweet = f"""{cl_m_name} (A) 🎟️\n\nSale ({s['tier']})\n• Opens: {open_label}\n• Closes: {s['close'].replace(',', ' -')}\n{info_line}\nForwarding Deadline ➡️\n• Closes: {fwd_label}"""
+                sale_tweet = f"""{cl_m_name} (A) 🎟️\n\nSale ({s['tier']})\n• Opens: {open_label}\n• Closes: {s['close'].replace(',', ' -')}\n{info_line}"""
                 cl_tweets.append((f"🎟️ Sale Opening ({s['tier']})", open_rem_time, sale_tweet))
 
                 if s.get("close") and s["close"] != "TBA":
                     close_dt = parse_to_datetime(s['close'])
-                    is_close_today = close_dt and close_dt.date() == now.date()
+                    close_rem_dt = parse_to_datetime(get_offset_time(s['close'], hours_before=1))
+                    is_close_today = close_dt and close_rem_dt and close_dt.date() == close_rem_dt.date()
+                    
                     close_time_str = close_dt.strftime("%I:%M%p").lstrip("0").lower() if close_dt else s['close']
-                    close_label = f"Today {close_time_str}" if is_close_today else s['close']
+                    close_label = f"Today, {close_time_str}" if is_close_today else s['close']
 
                     close_rem_time = get_offset_time(s['close'], hours_before=1)
                     close_tweet = f"""{cl_m_name} (A) ⏰\n\nSale Closing Reminder ({s['tier']})\n• Closes: {close_label}"""
                     cl_tweets.append((f"⏰ Sale Closing ({s['tier']})", close_rem_time, close_tweet))
 
                 if s.get("forwarding_deadline") and s["forwarding_deadline"] != "TBA":
+                    fwd_dt = parse_to_datetime(s['forwarding_deadline'])
+                    fwd_rem_dt = parse_to_datetime(get_offset_time(s['forwarding_deadline'], hours_before=1))
+                    is_fwd_today = fwd_dt and fwd_rem_dt and fwd_dt.date() == fwd_rem_dt.date()
+                    
+                    fwd_time_str = fwd_dt.strftime("%I:%M%p").lstrip("0").lower() if fwd_dt else s['forwarding_deadline']
+                    fwd_label = f"Today, {fwd_time_str}" if is_fwd_today else s['forwarding_deadline']
+
                     fwd_rem_time = get_offset_time(s['forwarding_deadline'], hours_before=1)
                     fwd_tweet = f"""{cl_m_name} (A) ➡️\n\nForwarding Deadline ({s['tier']})\n• Closes: {fwd_label}"""
                     cl_tweets.append((f"➡️ Forwarding Deadline ({s['tier']})", fwd_rem_time, fwd_tweet))
