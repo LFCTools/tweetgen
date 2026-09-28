@@ -107,9 +107,9 @@ def format_gcal_date(dt, is_all_day=False):
         end_date_only = (dt + timedelta(days=1)).strftime("%Y%m%d")
         return f"{date_only}/{end_date_only}"
     else:
+        # 0-minute duration (start and end are identical)
         start_iso = dt.strftime("%Y%m%dT%H%M%S")
-        end_iso = (dt + timedelta(hours=1)).strftime("%Y%m%dT%H%M%S")
-        return f"{start_iso}/{end_iso}"
+        return f"{start_iso}/{start_iso}"
 
 def get_offset_time(date_str, hours_before=1):
     dt = parse_to_datetime(date_str)
@@ -362,8 +362,9 @@ with tab1:
 
             ballots_res_tweet = f"""{pl_m_name} (H) - Local & YA Ballots 📢\n\nLocal & YA Ballot Results 🗳️\n• Results today\n• Ensure you have funds in your bank \n\nComment below if successful 👇"""
 
+            # Rule: All tweets/calendar events 1 hour before, apart from registration opening and ballot opening
             reg_close_scheduled = get_offset_time(pl_r_close, hours_before=1)
-            ballots_open_scheduled = pl_b_open
+            ballots_open_scheduled = pl_b_open # Exact opening time (0 hours before)
             ballots_close_scheduled = get_offset_time(pl_b_close, hours_before=1)
             ballots_res_scheduled = get_results_day_morning(pl_b_res)
 
@@ -397,8 +398,6 @@ with tab1:
                 if s.get("close") and s["close"] != "TBA":
                     close_dt = parse_to_datetime(s['close'])
                     close_rem_dt = parse_to_datetime(get_offset_time(s['close'], hours_before=1))
-                    
-                    # Compare closing date against the reminder/tweet scheduled date (close_rem_dt)
                     is_close_today = close_dt and close_rem_dt and close_dt.date() == close_rem_dt.date()
                     
                     close_time_str = close_dt.strftime("%I:%M%p").lstrip("0").lower() if close_dt else s['close']
@@ -436,34 +435,38 @@ with tab1:
                             x_url = get_x_intent_url(content)
                             st.link_button(f"🌐 Post on X", x_url, use_container_width=True)
                         with c2:
+                            # Rule: All reminders/events 1 hour before, except registration open & ballot open
                             dt_ev = parse_to_datetime(post_time)
                             if dt_ev:
                                 gcal_url = f"https://calendar.google.com/calendar/render?action=TEMPLATE&text={urllib.parse.quote(f'{pl_m_name} (H): {title}')}&dates={format_gcal_date(dt_ev)}"
                                 st.link_button("📅 Add to Google Calendar", gcal_url, use_container_width=True)
 
             with st.container(border=True):
-                st.markdown("### 📅 Master Calendar Schedule Links")
+                st.markdown("### 📅 Master Calendar Schedule Links (1 Hour Before Events)")
                 events = [
-                    {"label": "Registration Open", "name": f"{pl_m_name} (H) - Registration Opens", "time": pl_r_open, "all_day": False},
-                    {"label": "Registration Closes", "name": f"{pl_m_name} (H) - Registration Closes", "time": pl_r_close, "all_day": False},
-                    {"label": "Unique Links Sent", "name": f"{pl_m_name} (H) - Unique Links Sent", "time": pl_l_sent, "all_day": False},
-                    {"label": "Ballots Open", "name": f"{pl_m_name} (H) - Ballots Open", "time": pl_b_open, "all_day": False},
-                    {"label": "Ballots Close", "name": f"{pl_m_name} (H) - Ballots Close", "time": pl_b_close, "all_day": False},
-                    {"label": "Ballots Results", "name": f"{pl_m_name} (H) - Ballots Results", "time": pl_b_res, "all_day": True}
+                    {"label": "Registration Open", "name": f"{pl_m_name} (H) - Registration Opens", "time": pl_r_open, "all_day": False, "offset": 0}, # 0 hr before
+                    {"label": "Registration Closes", "name": f"{pl_m_name} (H) - Registration Closes", "time": pl_r_close, "all_day": False, "offset": 1}, # 1 hr before
+                    {"label": "Unique Links Sent", "name": f"{pl_m_name} (H) - Unique Links Sent", "time": pl_l_sent, "all_day": False, "offset": 1},
+                    {"label": "Ballots Open", "name": f"{pl_m_name} (H) - Ballots Open", "time": pl_b_open, "all_day": False, "offset": 0}, # 0 hr before
+                    {"label": "Ballots Close", "name": f"{pl_m_name} (H) - Ballots Close", "time": pl_b_close, "all_day": False, "offset": 1},
+                    {"label": "Ballots Results", "name": f"{pl_m_name} (H) - Ballots Results", "time": pl_b_res, "all_day": True, "offset": 0}
                 ]
                 for s in edited_pl_sales:
-                    events.append({"label": f"Sale Open ({s['tier']})", "name": f"{pl_m_name} (H) - Sale Opens ({s['tier']})", "time": s['open'], "all_day": False})
+                    events.append({"label": f"Sale Open ({s['tier']})", "name": f"{pl_m_name} (H) - Sale Opens ({s['tier']})", "time": s['open'], "all_day": False, "offset": 1})
                     if s.get("close") and s["close"] != "TBA":
-                        events.append({"label": f"Sale Close ({s['tier']})", "name": f"{pl_m_name} (H) - Sale Closes ({s['tier']})", "time": s['close'], "all_day": False})
-                events.append({"label": "Match Day", "name": f"{pl_m_name} (H) - Match Date", "time": pl_m_date, "all_day": False})
+                        events.append({"label": f"Sale Close ({s['tier']})", "name": f"{pl_m_name} (H) - Sale Closes ({s['tier']})", "time": s['close'], "all_day": False, "offset": 1})
+                events.append({"label": "Match Day", "name": f"{pl_m_name} (H) - Match Date", "time": pl_m_date, "all_day": False, "offset": 1})
 
                 for i, ev in enumerate(events):
                     if ev["time"] and ev["time"] != "TBA":
-                        dt_obj = parse_to_datetime(ev["time"])
-                        gcal_dates = format_gcal_date(dt_obj, is_all_day=ev["all_day"])
-                        if gcal_dates:
-                            gcal_url = f"https://calendar.google.com/calendar/render?action=TEMPLATE&text={urllib.parse.quote(ev['name'])}&dates={gcal_dates}"
-                            st.link_button(f"📅 Add **{ev['label']}** ({ev['time']})", gcal_url, use_container_width=True)
+                        base_dt = parse_to_datetime(ev["time"])
+                        if base_dt:
+                            # Apply offset rule (1 hour before, or exact time for 0 offset)
+                            target_dt = base_dt - timedelta(hours=ev["offset"]) if not ev["all_day"] else base_dt
+                            gcal_dates = format_gcal_date(target_dt, is_all_day=ev["all_day"])
+                            if gcal_dates:
+                                gcal_url = f"https://calendar.google.com/calendar/render?action=TEMPLATE&text={urllib.parse.quote(ev['name'])}&dates={gcal_dates}"
+                                st.link_button(f"📅 Add **{ev['label']}** ({target_dt.strftime('%a %d %b, %I:%M%p').lstrip('0').lower() if not ev['all_day'] else ev['time']})", gcal_url, use_container_width=True)
 
 
 # ==========================================
@@ -568,6 +571,7 @@ with tab2:
                 ("⏰ Local Ballot Closing", get_offset_time(cup_b_close, hours_before=1), f"""{cup_m_name} (H) - Local Ballot 📢\n\nLocal Ballot 🗳️\n• Opens: Now\n• Closes: {ballots_close_label}\n\nhttps://ticketing.liverpoolfc.com/tickets/ballots""")
             ]
 
+            now = datetime.now()
             for s in edited_cup_sales:
                 open_dt = parse_to_datetime(s['open'])
                 open_rem_dt = parse_to_datetime(get_offset_time(s['open'], hours_before=1))
@@ -587,8 +591,6 @@ with tab2:
                 if s.get("close") and s["close"] != "TBA":
                     close_dt = parse_to_datetime(s['close'])
                     close_rem_dt = parse_to_datetime(get_offset_time(s['close'], hours_before=1))
-                    
-                    # Same day check: compare closing date against the reminder/tweet scheduled date (close_rem_dt)
                     is_close_today = close_dt and close_rem_dt and close_dt.date() == close_rem_dt.date()
                     
                     close_time_str = close_dt.strftime("%I:%M%p").lstrip("0").lower() if close_dt else s['close']
@@ -632,27 +634,29 @@ with tab2:
                                 st.link_button("📅 Add to Google Calendar", gcal_url, use_container_width=True)
 
             with st.container(border=True):
-                st.markdown("### 📅 Master Calendar Schedule Links")
+                st.markdown("### 📅 Master Calendar Schedule Links (1 Hour Before Events)")
                 cup_events = [
-                    {"label": "Local Ballot Opens", "name": f"{cup_m_name} (H) - Local Ballot Opens", "time": cup_b_open, "all_day": False},
-                    {"label": "Local Ballot Closes", "name": f"{cup_m_name} (H) - Local Ballot Closes", "time": cup_b_close, "all_day": False},
-                    {"label": "Local Ballot Results", "name": f"{cup_m_name} (H) - Local Ballot Results", "time": cup_b_res, "all_day": True},
-                    {"label": "ACS Payment Start", "name": f"{cup_m_name} (H) - ACS Payment Start", "time": cup_acs_start, "all_day": True},
-                    {"label": "ACS Payment End", "name": f"{cup_m_name} (H) - ACS Payment End", "time": cup_acs_end, "all_day": True}
+                    {"label": "Local Ballot Opens", "name": f"{cup_m_name} (H) - Local Ballot Opens", "time": cup_b_open, "all_day": False, "offset": 0},
+                    {"label": "Local Ballot Closes", "name": f"{cup_m_name} (H) - Local Ballot Closes", "time": cup_b_close, "all_day": False, "offset": 1},
+                    {"label": "Local Ballot Results", "name": f"{cup_m_name} (H) - Local Ballot Results", "time": cup_b_res, "all_day": True, "offset": 0},
+                    {"label": "ACS Payment Start", "name": f"{cup_m_name} (H) - ACS Payment Start", "time": cup_acs_start, "all_day": True, "offset": 0},
+                    {"label": "ACS Payment End", "name": f"{cup_m_name} (H) - ACS Payment End", "time": cup_acs_end, "all_day": True, "offset": 0}
                 ]
                 for s in edited_cup_sales:
-                    cup_events.append({"label": f"Sale Open ({s['tier']})", "name": f"{cup_m_name} (H) - Sale Opens ({s['tier']})", "time": s['open'], "all_day": False})
+                    cup_events.append({"label": f"Sale Open ({s['tier']})", "name": f"{cup_m_name} (H) - Sale Opens ({s['tier']})", "time": s['open'], "all_day": False, "offset": 1})
                     if s.get("close") and s["close"] != "TBA":
-                        cup_events.append({"label": f"Sale Close ({s['tier']})", "name": f"{cup_m_name} (H) - Sale Closes ({s['tier']})", "time": s['close'], "all_day": False})
-                cup_events.append({"label": "Match Day", "name": f"{cup_m_name} (H) - Match Date", "time": cup_m_date, "all_day": False})
+                        cup_events.append({"label": f"Sale Close ({s['tier']})", "name": f"{cup_m_name} (H) - Sale Closes ({s['tier']})", "time": s['close'], "all_day": False, "offset": 1})
+                cup_events.append({"label": "Match Day", "name": f"{cup_m_name} (H) - Match Date", "time": cup_m_date, "all_day": False, "offset": 1})
 
                 for i, ev in enumerate(cup_events):
                     if ev["time"] and ev["time"] != "TBA":
-                        dt_obj = parse_to_datetime(ev["time"])
-                        gcal_dates = format_gcal_date(dt_obj, is_all_day=ev["all_day"])
-                        if gcal_dates:
-                            gcal_url = f"https://calendar.google.com/calendar/render?action=TEMPLATE&text={urllib.parse.quote(ev['name'])}&dates={gcal_dates}"
-                            st.link_button(f"📅 Add **{ev['label']}** ({ev['time']})", gcal_url, use_container_width=True)
+                        base_dt = parse_to_datetime(ev["time"])
+                        if base_dt:
+                            target_dt = base_dt - timedelta(hours=ev["offset"]) if not ev["all_day"] else base_dt
+                            gcal_dates = format_gcal_date(target_dt, is_all_day=ev["all_day"])
+                            if gcal_dates:
+                                gcal_url = f"https://calendar.google.com/calendar/render?action=TEMPLATE&text={urllib.parse.quote(ev['name'])}&dates={gcal_dates}"
+                                st.link_button(f"📅 Add **{ev['label']}** ({target_dt.strftime('%a %d %b, %I:%M%p').lstrip('0').lower() if not ev['all_day'] else ev['time']})", gcal_url, use_container_width=True)
 
 
 # ==========================================
@@ -813,23 +817,25 @@ with tab3:
                                 st.link_button("📅 Add to Google Calendar", gcal_url, use_container_width=True)
 
             with st.container(border=True):
-                st.markdown("### 📅 Master Calendar Schedule Links")
+                st.markdown("### 📅 Master Calendar Schedule Links (1 Hour Before Events)")
                 away_events = []
                 for s in edited_away_sales:
-                    away_events.append({"label": f"Sale Open ({s['tier']})", "name": f"{away_m_name} (A) - Sale Opens ({s['tier']})", "time": s['open'], "all_day": False})
+                    away_events.append({"label": f"Sale Open ({s['tier']})", "name": f"{away_m_name} (A) - Sale Opens ({s['tier']})", "time": s['open'], "all_day": False, "offset": 1})
                     if s.get("close") and s["close"] != "TBA":
-                        away_events.append({"label": f"Sale Close ({s['tier']})", "name": f"{away_m_name} (A) - Sale Closes ({s['tier']})", "time": s['close'], "all_day": False})
+                        away_events.append({"label": f"Sale Close ({s['tier']})", "name": f"{away_m_name} (A) - Sale Closes ({s['tier']})", "time": s['close'], "all_day": False, "offset": 1})
                 if away_fwd != "TBA":
-                    away_events.append({"label": "Forwarding Deadline", "name": f"{away_m_name} (A) - Forwarding Deadline", "time": away_fwd, "all_day": False})
-                away_events.append({"label": "Match Day", "name": f"{away_m_name} (A) - Match Date", "time": away_m_date, "all_day": False})
+                    away_events.append({"label": "Forwarding Deadline", "name": f"{away_m_name} (A) - Forwarding Deadline", "time": away_fwd, "all_day": False, "offset": 1})
+                away_events.append({"label": "Match Day", "name": f"{away_m_name} (A) - Match Date", "time": away_m_date, "all_day": False, "offset": 1})
 
                 for i, ev in enumerate(away_events):
                     if ev["time"] and ev["time"] != "TBA":
-                        dt_obj = parse_to_datetime(ev["time"])
-                        gcal_dates = format_gcal_date(dt_obj, is_all_day=ev["all_day"])
-                        if gcal_dates:
-                            gcal_url = f"https://calendar.google.com/calendar/render?action=TEMPLATE&text={urllib.parse.quote(ev['name'])}&dates={gcal_dates}"
-                            st.link_button(f"📅 Add **{ev['label']}** ({ev['time']})", gcal_url, use_container_width=True)
+                        base_dt = parse_to_datetime(ev["time"])
+                        if base_dt:
+                            target_dt = base_dt - timedelta(hours=ev["offset"]) if not ev["all_day"] else base_dt
+                            gcal_dates = format_gcal_date(target_dt, is_all_day=ev["all_day"])
+                            if gcal_dates:
+                                gcal_url = f"https://calendar.google.com/calendar/render?action=TEMPLATE&text={urllib.parse.quote(ev['name'])}&dates={gcal_dates}"
+                                st.link_button(f"📅 Add **{ev['label']}** ({target_dt.strftime('%a %d %b, %I:%M%p').lstrip('0').lower() if not ev['all_day'] else ev['time']})", gcal_url, use_container_width=True)
 
 
 # ==========================================
@@ -964,8 +970,6 @@ with tab4:
                 if s.get("close") and s["close"] != "TBA":
                     close_dt = parse_to_datetime(s['close'])
                     close_rem_dt = parse_to_datetime(get_offset_time(s['close'], hours_before=1))
-                    
-                    # Compare closing date against the scheduled reminder date (close_rem_dt)
                     is_close_today = close_dt and close_rem_dt and close_dt.date() == close_rem_dt.date()
                     
                     close_time_str = close_dt.strftime("%I:%M%p").lstrip("0").lower() if close_dt else s['close']
@@ -1021,19 +1025,21 @@ with tab4:
                                 st.link_button("📅 Add to Google Calendar", gcal_url, use_container_width=True)
 
             with st.container(border=True):
-                st.markdown("### 📅 Master Calendar Schedule Links")
+                st.markdown("### 📅 Master Calendar Schedule Links (1 Hour Before Events)")
                 events = []
                 for s in edited_cl_sales:
-                    events.append({"label": f"Sale Open ({s['tier']})", "name": f"{cl_m_name} (A) - Sale Opens ({s['tier']})", "time": s['open'], "all_day": False})
-                    events.append({"label": f"Sale Close ({s['tier']})", "name": f"{cl_m_name} (A) - Sale Closes ({s['tier']})", "time": s['close'], "all_day": False})
+                    events.append({"label": f"Sale Open ({s['tier']})", "name": f"{cl_m_name} (A) - Sale Opens ({s['tier']})", "time": s['open'], "all_day": False, "offset": 1})
+                    events.append({"label": f"Sale Close ({s['tier']})", "name": f"{cl_m_name} (A) - Sale Closes ({s['tier']})", "time": s['close'], "all_day": False, "offset": 1})
                     if s['forwarding_deadline'] != "TBA":
-                        events.append({"label": f"Forwarding Deadline ({s['tier']})", "name": f"{cl_m_name} (A) - Forwarding Deadline ({s['tier']})", "time": s['forwarding_deadline'], "all_day": False})
-                events.append({"label": "Match Day", "name": f"{cl_m_name} (A) - Match Date", "time": cl_m_date, "all_day": False})
+                        events.append({"label": f"Forwarding Deadline ({s['tier']})", "name": f"{cl_m_name} (A) - Forwarding Deadline ({s['tier']})", "time": s['forwarding_deadline'], "all_day": False, "offset": 1})
+                events.append({"label": "Match Day", "name": f"{cl_m_name} (A) - Match Date", "time": cl_m_date, "all_day": False, "offset": 1})
 
                 for i, ev in enumerate(events):
                     if ev["time"] and ev["time"] != "TBA":
-                        dt_obj = parse_to_datetime(ev["time"])
-                        gcal_dates = format_gcal_date(dt_obj, is_all_day=ev["all_day"])
-                        if gcal_dates:
-                            gcal_url = f"https://calendar.google.com/calendar/render?action=TEMPLATE&text={urllib.parse.quote(ev['name'])}&dates={gcal_dates}"
-                            st.link_button(f"📅 Add **{ev['label']}** ({ev['time']})", gcal_url, use_container_width=True)
+                        base_dt = parse_to_datetime(ev["time"])
+                        if base_dt:
+                            target_dt = base_dt - timedelta(hours=ev["offset"]) if not ev["all_day"] else base_dt
+                            gcal_dates = format_gcal_date(target_dt, is_all_day=ev["all_day"])
+                            if gcal_dates:
+                                gcal_url = f"https://calendar.google.com/calendar/render?action=TEMPLATE&text={urllib.parse.quote(ev['name'])}&dates={gcal_dates}"
+                                st.link_button(f"📅 Add **{ev['label']}** ({target_dt.strftime('%a %d %b, %I:%M%p').lstrip('0').lower() if not ev['all_day'] else ev['time']})", gcal_url, use_container_width=True)
