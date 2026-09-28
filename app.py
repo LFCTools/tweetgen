@@ -162,7 +162,7 @@ def get_gcal_url(title, dt, details="", is_all_day=False):
         date_param = f"{date_only}/{end_date_only}"
     else:
         start_iso = dt.strftime("%Y%m%dT%H%M%S")
-        end_iso = (dt + timedelta(hours=1)).strftime("%Y%m%dT%H%M%S")
+        end_iso = (dt + timedelta(hours=1)).strftime("%Y%m%dT%H%M%S")  # FIXED: distinct end time prevents Google Calendar API rejection
         date_param = f"{start_iso}/{end_iso}"
 
     params = {
