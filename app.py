@@ -587,6 +587,8 @@ with tab2:
                 if s.get("close") and s["close"] != "TBA":
                     close_dt = parse_to_datetime(s['close'])
                     close_rem_dt = parse_to_datetime(get_offset_time(s['close'], hours_before=1))
+                    
+                    # Same day check: compare closing date against the reminder/tweet scheduled date (close_rem_dt)
                     is_close_today = close_dt and close_rem_dt and close_dt.date() == close_rem_dt.date()
                     
                     close_time_str = close_dt.strftime("%I:%M%p").lstrip("0").lower() if close_dt else s['close']
