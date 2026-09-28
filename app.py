@@ -397,6 +397,9 @@ with tab1:
                 if s.get("close") and s["close"] != "TBA":
                     close_dt = parse_to_datetime(s['close'])
                     open_dt_for_close = parse_to_datetime(s['open'])
+                    close_rem_dt = parse_to_datetime(get_offset_time(s['close'], hours_before=1))
+                    
+                    # Same day check: if sale closes on the same calendar day it opens
                     is_close_same_day = close_dt and open_dt_for_close and close_dt.date() == open_dt_for_close.date()
                     
                     close_time_str = close_dt.strftime("%I:%M%p").lstrip("0").lower() if close_dt else s['close']
@@ -566,6 +569,7 @@ with tab2:
                 ("⏰ Local Ballot Closing", get_offset_time(cup_b_close, hours_before=1), f"""{cup_m_name} (H) - Local Ballot 📢\n\nLocal Ballot 🗳️\n• Opens: Now\n• Closes: {ballots_close_label}\n\nhttps://ticketing.liverpoolfc.com/tickets/ballots""")
             ]
 
+            now = datetime.now()
             for s in edited_cup_sales:
                 open_dt = parse_to_datetime(s['open'])
                 open_rem_dt = parse_to_datetime(get_offset_time(s['open'], hours_before=1))
