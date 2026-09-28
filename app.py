@@ -162,7 +162,7 @@ def get_gcal_url(title, dt, details="", is_all_day=False):
         date_param = f"{date_only}/{end_date_only}"
     else:
         start_iso = dt.strftime("%Y%m%dT%H%M%S")
-        end_iso = (dt + timedelta(hours=1)).strftime("%Y%m%dT%H%M%S")  # FIXED: distinct end time prevents Google Calendar API rejection
+        end_iso = (dt + timedelta(hours=1)).strftime("%Y%m%dT%H%M%S")
         date_param = f"{start_iso}/{end_iso}"
 
     params = {
@@ -410,6 +410,10 @@ for s_key in [
     "active_cup_tweets",
     "active_away_tweets",
     "active_cl_tweets",
+    "active_pl_announcement",
+    "active_cup_announcement",
+    "active_away_announcement",
+    "active_cl_announcement",
 ]:
     if s_key not in st.session_state:
         st.session_state[s_key] = None
@@ -668,6 +672,7 @@ with tab1:
                 ))
 
             st.session_state["active_pl_tweets"] = tweets_timeline
+            st.session_state["active_pl_announcement"] = announcement_tweet
 
     if (
         "active_pl_tweets" in st.session_state
@@ -733,14 +738,14 @@ with tab1:
                 pl_r_open
             )
             if master_gcal_date:
+                announcement_desc = st.session_state.get("active_pl_announcement", "")
                 master_gcal_url = get_gcal_url(
                     f"Liverpool v {pl_m_name} - Ticket Schedule & Matchday",
                     master_gcal_date,
-                    announcement_tweet,
+                    announcement_desc,
                 )
                 st.link_button(
-                    f"📅 Add All {pl_m_name} Fixture Details to Google Calendar"
-                    " (Master Event)",
+                    f"📅 Add All {pl_m_name} Fixture Details to Google Calendar (Master Event)",
                     master_gcal_url,
                     use_container_width=True,
                 )
@@ -1052,6 +1057,7 @@ with tab2:
                     ))
 
             st.session_state["active_cup_tweets"] = cup_tweets_timeline
+            st.session_state["active_cup_announcement"] = announcement_tweet
 
     if (
         "active_cup_tweets" in st.session_state
@@ -1117,14 +1123,14 @@ with tab2:
                 cup_b_open
             )
             if master_cup_date:
+                announcement_desc = st.session_state.get("active_cup_announcement", "")
                 master_cup_url = get_gcal_url(
                     f"Liverpool v {cup_m_name} - Cup Ticket Schedule & Matchday",
                     master_cup_date,
-                    announcement_tweet,
+                    announcement_desc,
                 )
                 st.link_button(
-                    f"📅 Add All {cup_m_name} Fixture Details to Google Calendar"
-                    " (Master Event)",
+                    f"📅 Add All {cup_m_name} Fixture Details to Google Calendar (Master Event)",
                     master_cup_url,
                     use_container_width=True,
                 )
@@ -1392,6 +1398,7 @@ with tab3:
                 ))
 
             st.session_state["active_away_tweets"] = away_tweets
+            st.session_state["active_away_announcement"] = announcement_tweet
 
     if (
         "active_away_tweets" in st.session_state
@@ -1431,14 +1438,14 @@ with tab3:
 
             master_away_date = parse_to_datetime(away_m_date)
             if master_away_date:
+                announcement_desc = st.session_state.get("active_away_announcement", "")
                 master_away_url = get_gcal_url(
                     f"Liverpool at {away_m_name} (A) - Ticket Details & Matchday",
                     master_away_date,
-                    announcement_tweet,
+                    announcement_desc,
                 )
                 st.link_button(
-                    f"📅 Add All {away_m_name} Away Details to Google Calendar"
-                    " (Master Event)",
+                    f"📅 Add All {away_m_name} Away Details to Google Calendar (Master Event)",
                     master_away_url,
                     use_container_width=True,
                 )
@@ -1750,6 +1757,7 @@ with tab4:
                 ))
 
             st.session_state["active_cl_tweets"] = cl_tweets
+            st.session_state["active_cl_announcement"] = cl_announcement_tweet
 
     if (
         "active_cl_tweets" in st.session_state
@@ -1791,15 +1799,14 @@ with tab4:
 
             master_cl_date = parse_to_datetime(cl_m_date)
             if master_cl_date:
+                announcement_desc = st.session_state.get("active_cl_announcement", "")
                 master_cl_url = get_gcal_url(
-                    f"Liverpool at {cl_m_name} (CL Away) - European Ticket Schedule &"
-                    " Matchday",
+                    f"Liverpool at {cl_m_name} (CL Away) - European Ticket Schedule & Matchday",
                     master_cl_date,
-                    cl_announcement_tweet,
+                    announcement_desc,
                 )
                 st.link_button(
-                    f"📅 Add All {cl_m_name} European Away Details to Google Calendar"
-                    " (Master Event)",
+                    f"📅 Add All {cl_m_name} European Away Details to Google Calendar (Master Event)",
                     master_cl_url,
                     use_container_width=True,
                 )
