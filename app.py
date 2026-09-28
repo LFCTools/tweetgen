@@ -175,11 +175,7 @@ def get_gcal_url(title, dt, details="", is_all_day=False):
 
 
 def generate_fixture_ics(match_name, event_list):
-  """event_list: list of tuples (event_title, dt_obj, description, is_all_day)
-
-  Generates a multi-event .ics file so users can import all dates into
-  Apple/Google Calendar at once.
-  """
+  """event_list: list of tuples (event_title, dt_obj, description, is_all_day)"""
   ics_lines = [
       "BEGIN:VCALENDAR",
       "VERSION:2.0",
@@ -681,6 +677,7 @@ with tab1:
       with st.container(border=True):
         st.markdown("### 📅 Add All Events to Calendar")
 
+        # 1. Build discrete event entries
         pl_events = [
             (
                 f"Liverpool v {pl_m_name} (H)",
@@ -734,6 +731,24 @@ with tab1:
                 False,
             ))
 
+        # 2. Master Google Calendar Invite (Contains all event details in notes)
+        master_gcal_date = parse_to_datetime(pl_m_date) or parse_to_datetime(
+            pl_r_open
+        )
+        if master_gcal_date:
+          master_gcal_url = get_gcal_url(
+              f"Liverpool v {pl_m_name} - Ticket Schedule & Matchday",
+              master_gcal_date,
+              announcement_tweet,
+          )
+          st.link_button(
+              f"📅 Add All {pl_m_name} Fixture Details to Google Calendar"
+              " (Master Event)",
+              master_gcal_url,
+              use_container_width=True,
+          )
+
+        # 3. Multi-event .ics file for 1-click bulk import
         ics_data = generate_fixture_ics(pl_m_name, pl_events)
         st.download_button(
             label=f"📥 Download All {pl_m_name} Events to Calendar (.ics)",
@@ -1102,6 +1117,22 @@ with tab2:
                 False,
             ))
 
+        master_cup_date = parse_to_datetime(cup_m_date) or parse_to_datetime(
+            cup_b_open
+        )
+        if master_cup_date:
+          master_cup_url = get_gcal_url(
+              f"Liverpool v {cup_m_name} - Cup Ticket Schedule & Matchday",
+              master_cup_date,
+              announcement_tweet,
+          )
+          st.link_button(
+              f"📅 Add All {cup_m_name} Fixture Details to Google Calendar"
+              " (Master Event)",
+              master_cup_url,
+              use_container_width=True,
+          )
+
         ics_cup_data = generate_fixture_ics(cup_m_name, cup_events)
         st.download_button(
             label=f"📥 Download All {cup_m_name} Events to Calendar (.ics)",
@@ -1401,6 +1432,20 @@ with tab3:
                 f"Away ticket sale closes for {s['tier']}",
                 False,
             ))
+
+        master_away_date = parse_to_datetime(away_m_date)
+        if master_away_date:
+          master_away_url = get_gcal_url(
+              f"Liverpool at {away_m_name} (A) - Ticket Details & Matchday",
+              master_away_date,
+              announcement_tweet,
+          )
+          st.link_button(
+              f"📅 Add All {away_m_name} Away Details to Google Calendar"
+              " (Master Event)",
+              master_away_url,
+              use_container_width=True,
+          )
 
         ics_away_data = generate_fixture_ics(away_m_name, away_events)
         st.download_button(
@@ -1747,6 +1792,21 @@ with tab4:
                 f"Forwarding closes for {s['tier']}",
                 False,
             ))
+
+        master_cl_date = parse_to_datetime(cl_m_date)
+        if master_cl_date:
+          master_cl_url = get_gcal_url(
+              f"Liverpool at {cl_m_name} (CL Away) - European Ticket Schedule &"
+              " Matchday",
+              master_cl_date,
+              cl_announcement_tweet,
+          )
+          st.link_button(
+              f"📅 Add All {cl_m_name} European Away Details to Google Calendar"
+              " (Master Event)",
+              master_cl_url,
+              use_container_width=True,
+          )
 
         ics_cl_data = generate_fixture_ics(cl_m_name, cl_events)
         st.download_button(
