@@ -1,5 +1,8 @@
+import hashlib
 import json
+import re
 
+import pandas as pd
 import requests
 import streamlit as st
 from bs4 import BeautifulSoup
@@ -10,27 +13,35 @@ from helpers import (
     TBA,
     TWEET_LIMIT,
     buffer_due_at,
+    build_ics,
     format_datetime,
-    format_time,
     gcal_url,
     get_hallmap_link,
-    get_offset_time,
-    get_results_day_morning,
     get_x_intent_url,
-    is_set,
+    has_time,
     now_uk,
     parse_to_datetime,
     shorten_tier_name,
     strip_json_fences,
-    today_label,
+    to_display,
     tweet_length,
 )
+from templates import CLASSIFY_PROMPT, MATCH_TYPES
 
 GEMINI_MODEL = "gemini-2.5-flash"
 PAGE_TEXT_LIMIT = 40000
 MIN_PAGE_TEXT = 300
-IMMEDIATE = "Immediate / Upon Scanning"
-BALLOTS_URL = "https://ticketing.liverpoolfc.com/tickets/ballots"
+AUTO = "auto"
+
+
+# ==========================================
+# SECRETS
+# ==========================================
+def secret(name):
+    try:
+        return st.secrets.get(name)
+    except Exception:  # no secrets file at all
+        return None
 
 
 # ==========================================
@@ -38,8 +49,7 @@ BALLOTS_URL = "https://ticketing.liverpoolfc.com/tickets/ballots"
 # ==========================================
 def schedule_to_buffer(text, scheduled_at_local):
     """Queue a post in Buffer. `scheduled_at_local` is a naive UK-time datetime."""
-    api_key = st.secrets.get("BUFFER_API_KEY")
-    channel_id = st.secrets.get("BUFFER_CHANNEL_ID")
+    api_key, channel_id = secret("BUFFER_API_KEY"), secret("BUFFER_CHANNEL_ID")
     if not api_key:
         return False, "BUFFER_API_KEY is missing from Streamlit secrets."
     if not channel_id:
@@ -69,7 +79,6 @@ def schedule_to_buffer(text, scheduled_at_local):
             "dueAt": buffer_due_at(scheduled_at_local),
         }
     }
-
     try:
         response = requests.post(
             "https://api.buffer.com",
@@ -95,6 +104,7 @@ def get_gemini_client(api_key):
     return genai.Client(api_key=api_key)
 
 
+@st.cache_data(ttl=600, show_spinner=False)
 def fetch_page_text(url):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     response = requests.get(url, headers=headers, timeout=15)
@@ -104,7 +114,6 @@ def fetch_page_text(url):
     for tag in soup(["script", "style", "nav", "footer", "header"]):
         tag.extract()
     page_text = " ".join(soup.get_text().split())
-
     if len(page_text) < MIN_PAGE_TEXT:
         raise ValueError(
             f"The page only contained {len(page_text)} characters of text. "
@@ -114,13 +123,9 @@ def fetch_page_text(url):
 
 
 @st.cache_data(ttl=600, show_spinner=False)
-def scan_ticket_page(url, prompt_template, _api_key):
-    """Fetch a ticket page and extract structured details with Gemini (cached 10 min per URL)."""
-    page_text = fetch_page_text(url)
+def ask_gemini(prompt_template, page_text, _api_key):
     prompt = prompt_template.replace("<<PAGE_TEXT>>", page_text)
-
-    client = get_gemini_client(_api_key)
-    ai_response = client.models.generate_content(
+    ai_response = get_gemini_client(_api_key).models.generate_content(
         model=GEMINI_MODEL,
         contents=prompt,
         config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0),
@@ -128,652 +133,430 @@ def scan_ticket_page(url, prompt_template, _api_key):
     data = json.loads(strip_json_fences(ai_response.text or ""))
     if not isinstance(data, dict):
         raise ValueError("Gemini did not return a JSON object.")
-    if not isinstance(data.get("sales"), list):
-        data["sales"] = []
     return data
 
 
 # ==========================================
-# PROMPTS
+# STATE
 # ==========================================
-COMMON_RULES = """
-Respond ONLY with a valid JSON object matching the structure below.
-Use abbreviated days (e.g., Wed) and months (e.g., Nov) and format times like 10:00am or 11:00am.
-If any field is missing, make its value "TBA". Never invent dates that are not in the source text.
-"""
+def dt_or_none(value):
+    return None if value is None or pd.isna(value) else pd.Timestamp(value).to_pydatetime()
 
-PL_PROMPT = """
-Analyze the following raw text from an LFC Premier League ticket page.
-CRITICAL INSTRUCTION: Exclude any sales tiers mentioning wheelchair, ambulant, or disabled access.
-CRITICAL INSTRUCTION FOR 'links_sent': Look inside the 'TICKET SALE' or sale details section for sentences mentioning 'unique link'. Extract that exact date/time.
-Extract unified registration details, local & YA ballot open/close/results dates, and ticket sale opening dates per tier.
-""" + COMMON_RULES + """
-Desired JSON Format:
-{
-  "match_name": "Only the opponent team name (e.g., Fulham)",
-  "reg_open": "Day Date, Time",
-  "reg_close": "Day Date, Time",
-  "links_sent": "Day Date",
-  "sales": [
-    {"tier": "All Members", "open": "Day Date, Time", "close": "Day Date, Time"}
-  ],
-  "ballot_open": "Day Date, Time",
-  "ballot_close": "Day Date, Time",
-  "ballot_results": "TBA or Day Date",
-  "match_date": "Day Date, Time"
-}
-Source Text: <<PAGE_TEXT>>
-"""
 
-CUP_PROMPT = """
-Analyze the following raw text from an LFC Cup or European Home match ticket page. Exclude any wheelchair, ambulant, or disabled sales tiers.
-Extract opponent name, competition type (determine whether it is 'League Cup', 'FA Cup', or 'Champions League' / 'European Home' based on the text), sales tiers with open/close times, local ballot dates, and ACS dates.
-""" + COMMON_RULES + """
-Desired JSON Format:
-{
-  "match_name": "Only the opponent team name (e.g., Spurs)",
-  "competition": "League Cup, FA Cup, or Champions League",
-  "sales": [
-    {"tier": "Credit balance of 2", "open": "Day Date, Time", "close": "Day Date, Time"}
-  ],
-  "ballot_open": "Day Date, Time",
-  "ballot_close": "Day Date, Time",
-  "ballot_results": "TBA or Day Date",
-  "acs_start": "Day Date",
-  "acs_end": "Day Date",
-  "match_date": "Day Date, Time"
-}
-Source Text: <<PAGE_TEXT>>
-"""
+def build_dates_df(cfg, data):
+    rows, index = [], []
+    for key, label, all_day_default in cfg["dates"]:
+        raw = data.get(key, TBA)
+        dt = parse_to_datetime(raw)
+        rows.append({"Event": label, "All day": (not has_time(raw)) if dt else all_day_default, "Date & time": dt})
+        index.append(key)
+    df = pd.DataFrame(rows, index=index)
+    df["Date & time"] = pd.to_datetime(df["Date & time"])
+    return df
 
-AWAY_PROMPT = """
-Analyze the following raw text from an LFC Away match ticket page. Exclude any wheelchair, ambulant, or disabled sales tiers.
-Extract opponent name, sales tiers with open/close times, and forwarding deadline if present.
-""" + COMMON_RULES + """
-Desired JSON Format:
-{
-  "match_name": "Only the opponent team name (e.g., Lask)",
-  "sales": [
-    {"tier": "9+ Away Credit Balance", "open": "Day Date, Time", "close": "Day Date, Time"}
-  ],
-  "forwarding_deadline": "Day Date, Time",
-  "match_date": "Day Date, Time"
-}
-Source Text: <<PAGE_TEXT>>
-"""
 
-CL_PROMPT = """
-Analyze the following raw text from an LFC Champions League / European Away match ticket page. Exclude any wheelchair, ambulant, or disabled sales tiers.
-Extract opponent name, match date, and sales tiers.
-CRITICAL INSTRUCTIONS:
-1. For 'tier', simplify the criteria name to something clean like '9+ Games' or '9+ Away Credit Balance' (e.g., if it says 'with a European Away Match Credit Balance of 9 or more', make tier '9+ Games').
-2. Look inside EACH sale section for the sentence mentioning 'Forwarding Deadline' and extract its exact date and time into 'forwarding_deadline' for that tier.
-3. For 'info', extract whether it states 'Guaranteed Sale' (or 'guaranteed'), 'Subject to availability', or leave empty if not stated.
-""" + COMMON_RULES + """
-Desired JSON Format:
-{
-  "match_name": "Only the opponent team name (e.g., LASK)",
-  "sales": [
-    {
-      "tier": "9+ Games",
-      "open": "Wed 23 Sep, 8:15am",
-      "close": "Thu 24 Sep, 7:30am",
-      "info": "Guaranteed Sale",
-      "forwarding_deadline": "Thu 24 Sep, 11:00am"
+def build_sales_df(cfg, data):
+    extras = cfg["sale_extras"]
+    rows = []
+    for sale in data.get("sales") or []:
+        tier = shorten_tier_name(str(sale.get("tier") or ""))
+        if not tier:
+            continue  # wheelchair / ambulant / disabled tiers are excluded
+        row = {
+            "Tier": tier,
+            "Opens": parse_to_datetime(sale.get("open")),
+            "Closes": parse_to_datetime(sale.get("close")),
+        }
+        if "info" in extras:
+            row["Info"] = str(sale.get("info") or "")
+        if "forwarding_deadline" in extras:
+            row["Forwarding deadline"] = parse_to_datetime(sale.get("forwarding_deadline"))
+        rows.append(row)
+
+    columns = ["Tier", "Opens", "Closes"]
+    if "info" in extras:
+        columns.append("Info")
+    if "forwarding_deadline" in extras:
+        columns.append("Forwarding deadline")
+    df = pd.DataFrame(rows, columns=columns)
+    for col in ("Opens", "Closes", "Forwarding deadline"):
+        if col in df:
+            df[col] = pd.to_datetime(df[col])
+    df["Tier"] = df["Tier"].astype("string")
+    if "Info" in df:
+        df["Info"] = df["Info"].astype("string")
+    return df
+
+
+def load_match(match_type, data, url=None):
+    cfg = MATCH_TYPES[match_type]
+    st.session_state.scan_id = st.session_state.get("scan_id", 0) + 1
+    st.session_state.match = {
+        "type": match_type,
+        "data": data,
+        "url": url,
+        "dates_df": build_dates_df(cfg, data),
+        "sales_df": build_sales_df(cfg, data),
     }
-  ],
-  "match_date": "Wed 14 Oct, 5:45pm"
-}
-Source Text: <<PAGE_TEXT>>
-"""
 
 
-# ==========================================
-# TWEET / EVENT BUILDERS
-# ==========================================
-def tweet(title, when, text, buffer=True):
-    """A timeline item. `when` is the display string for when it should be posted."""
-    return {"title": title, "when": when, "text": text, "buffer": buffer}
-
-
-def event(label, name, time, all_day=False):
-    return {"label": label, "name": name, "time": time, "all_day": all_day}
-
-
-def sale_close_reminder(match_prefix, tier, close):
-    if not is_set(close):
-        return None
-    text = f"""{match_prefix} ⏰\n\nSale Closing Reminder ({tier})\n• Closes: {today_label(close)}"""
-    return tweet(f"⏰ Sale Closing ({tier})", get_offset_time(close, hours_before=1), text)
-
-
-def sale_events(match_prefix, sales):
-    events = []
-    for s in sales:
-        events.append(event(f"Sale Open ({s['tier']})", f"{match_prefix} - Sale Opens ({s['tier']})", s["open"]))
-        if is_set(s.get("close")):
-            events.append(event(f"Sale Close ({s['tier']})", f"{match_prefix} - Sale Closes ({s['tier']})", s["close"]))
-    return events
-
-
-# ==========================================
-# UI COMPONENTS
-# ==========================================
-def editable_date_row(label, default_val, key):
-    if st.session_state.get(f"{key}_default") != default_val:
-        st.session_state[f"{key}_default"] = default_val
-        dt_obj = parse_to_datetime(default_val)
-
-        st.session_state[f"{key}_tba"] = not dt_obj
-        st.session_state[f"{key}_allday"] = bool(
-            dt_obj and not any(m in str(default_val).lower() for m in ["am", "pm", ":"])
-        )
-        st.session_state[f"{key}_date"] = dt_obj.date() if dt_obj else now_uk().date()
-        st.session_state[f"{key}_time"] = dt_obj.time() if dt_obj else now_uk().replace(hour=10, minute=0).time()
-
-    d = st.session_state[f"{key}_date"]
-    t = st.session_state[f"{key}_time"]
-    if st.session_state[f"{key}_tba"]:
-        display_val = TBA
-    elif st.session_state[f"{key}_allday"]:
-        display_val = d.strftime("%a %d %b")
-    else:
-        display_val = f"{d.strftime('%a %d %b')}, {format_time(t)}"
-
-    if st.toggle(f"✏️ **{label}** : {display_val}", key=f"toggle_{key}"):
-        with st.container(border=True):
-            c1, c2 = st.columns(2)
-            with c1:
-                st.date_input("Date", key=f"{key}_date", disabled=st.session_state[f"{key}_tba"])
-                st.checkbox("TBA", key=f"{key}_tba")
-            with c2:
-                st.time_input(
-                    "Time",
-                    key=f"{key}_time",
-                    disabled=st.session_state[f"{key}_tba"] or st.session_state[f"{key}_allday"],
-                )
-                st.checkbox("All Day", key=f"{key}_allday", disabled=st.session_state[f"{key}_tba"])
-
-    return display_val
-
-
-def reset_tab_state(prefix):
-    """Drop edited fields / generated tweets from a previous scan so a new match starts clean."""
-    keep = {f"{prefix}_url", f"{prefix}_scan", f"{prefix}_force", f"{prefix}_gen"}
+def start_over():
+    keep = {"scheduled_ids", "scan_id"}
     for k in list(st.session_state.keys()):
-        if k in keep:
-            continue
-        if k.startswith(f"{prefix}_") or k.startswith(f"toggle_{prefix}_"):
+        if k not in keep:
             del st.session_state[k]
-    st.session_state[f"tweets_{prefix}"] = None
 
 
-def scan_section(prefix, url_label, button_label, spinner_text, prompt_template, api_key):
+# ==========================================
+# STEP 1 — SCAN
+# ==========================================
+def render_scan_step(gemini_key):
+    st.markdown("#### 1 · Scan a ticket page")
     with st.container(border=True):
-        url = st.text_input(url_label, placeholder="https://www.liverpoolfc.com/tickets/...", key=f"{prefix}_url")
-        force = st.checkbox("Ignore cached scan (re-read the page)", key=f"{prefix}_force")
-        if st.button(button_label, width="stretch", key=f"{prefix}_scan"):
-            url = (url or "").strip()
-            if not url:
-                st.error("Please provide the URL.")
-            elif not url.startswith(("http://", "https://")):
-                st.error("The URL must start with http:// or https://")
-            else:
-                if force:
-                    scan_ticket_page.clear(url, prompt_template, api_key)
-                with st.spinner(spinner_text):
-                    try:
-                        data = scan_ticket_page(url, prompt_template, api_key)
-                    except requests.HTTPError as e:
-                        st.error(f"The ticket page returned an error ({e.response.status_code}). Check the URL.")
-                    except requests.RequestException as e:
-                        st.error(f"Could not load the ticket page: {e}")
-                    except json.JSONDecodeError:
-                        st.error("Gemini returned something that wasn't valid JSON. Try scanning again.")
-                    except Exception as e:
-                        st.error(f"Failed to automatically pull details: {e}")
-                    else:
-                        reset_tab_state(prefix)
-                        st.session_state[f"data_{prefix}"] = data
-                        st.toast("✅ Data successfully extracted!")
-    return st.session_state.get(f"data_{prefix}")
+        type_options = [AUTO, *MATCH_TYPES]
+        chosen = st.segmented_control(
+            "Match type",
+            type_options,
+            default=AUTO,
+            format_func=lambda k: "✨ Auto-detect" if k == AUTO else MATCH_TYPES[k]["label"],
+            key="type_choice",
+        ) or AUTO
+        url = st.text_input("Ticket page URL", placeholder="https://www.liverpoolfc.com/tickets/...", key="url")
+        force = st.checkbox("Re-read the page (ignore the 10-minute cache)", key="force")
 
+        c1, c2 = st.columns([2, 1])
+        scan = c1.button("🔍 Scan page", type="primary", width="stretch", disabled=not gemini_key)
+        manual = c2.button("✍️ Enter manually", width="stretch")
+        if not gemini_key:
+            st.caption("Scanning is off because GEMINI_API_KEY isn't set — you can still enter details manually.")
 
-def sale_tier_inputs(prefix, sales, extra=None):
-    """Render editable sale tiers. `extra(i, sale)` may return additional fields for a tier."""
-    edited = []
-    for i, sale in enumerate(sales):
-        short_name = shorten_tier_name(sale.get("tier", "") or "")
-        if not short_name:
-            continue
-        with st.expander(f"Sale Tier {i + 1} ({short_name})", expanded=True):
-            t_name = st.text_input("Criteria", value=short_name, key=f"{prefix}_tier_name_{i}")
-            t_open = editable_date_row("Sale Opens", sale.get("open", ""), f"{prefix}_tier_open_{i}")
-            t_close = editable_date_row("Closes", sale.get("close", TBA), f"{prefix}_tier_close_{i}")
-            row = {"tier": t_name, "open": t_open, "close": t_close}
-            if extra:
-                row.update(extra(i, sale))
-            edited.append(row)
-    return edited
-
-
-def _tweet_id(t, dt):
-    return f"{t['title']}|{dt.isoformat() if dt else ''}|{t['text']}"
-
-
-def render_buffer_section(prefix, tweets, label):
-    st.markdown("### ⚡ Buffer Automation")
-    scheduled = st.session_state.setdefault(f"scheduled_{prefix}", set())
-    now = now_uk()
-
-    rows, to_send = [], []
-    for t in tweets:
-        if not t["buffer"]:
-            continue
-        dt = parse_to_datetime(t["when"])
-        length = tweet_length(t["text"])
-        tid = _tweet_id(t, dt)
-        if tid in scheduled:
-            status = "✅ Already scheduled"
-        elif not dt:
-            status = "⏭️ Skip – no time set (TBA)"
-        elif dt <= now:
-            status = "⏭️ Skip – time already passed"
-        elif length > TWEET_LIMIT:
-            status = f"⏭️ Skip – too long ({length}/{TWEET_LIMIT})"
+    if manual:
+        if chosen == AUTO:
+            st.error("Pick a match type above first, then press Enter manually.")
         else:
-            status = "🕒 Will schedule"
-            to_send.append((t, dt, tid))
-        rows.append(
-            {
-                "Tweet": t["title"],
-                "UK time": format_datetime(dt) if dt else TBA,
-                "Sent to Buffer (UTC)": buffer_due_at(dt)[:16].replace("T", " ") if dt else "—",
-                "Status": status,
-            }
-        )
+            load_match(chosen, {})
+            st.toast("Blank form ready — fill in the details below.")
 
-    if rows:
-        st.dataframe(rows, hide_index=True, width="stretch")
-    st.caption(
-        "Each reminder is sent to Buffer once per session. If you change details and regenerate, "
-        "delete the old versions in Buffer."
-    )
+    if scan:
+        url = (url or "").strip()
+        if not url:
+            st.error("Please provide the URL.")
+            return
+        if not url.startswith(("http://", "https://")):
+            st.error("The URL must start with http:// or https://")
+            return
+        with st.status("Scanning ticket page…", expanded=False) as status:
+            try:
+                if force:
+                    fetch_page_text.clear(url)
+                status.update(label="Downloading page…")
+                page_text = fetch_page_text(url)
 
-    if st.button(
-        f"🚀 Schedule {len(to_send)} {label} reminder(s) to Buffer",
-        type="primary",
-        width="stretch",
-        key=f"buf_{prefix}",
-        disabled=not to_send,
-    ):
-        prog = st.progress(0)
-        ok_count, errors = 0, []
-        for idx, (t, dt, tid) in enumerate(to_send):
-            ok, msg = schedule_to_buffer(t["text"], dt)
-            if ok:
-                ok_count += 1
-                scheduled.add(tid)
+                match_type = chosen
+                if match_type == AUTO:
+                    status.update(label="Working out the match type…")
+                    if force:
+                        ask_gemini.clear(CLASSIFY_PROMPT, page_text, gemini_key)
+                    match_type = ask_gemini(CLASSIFY_PROMPT, page_text, gemini_key).get("match_type")
+                    if match_type not in MATCH_TYPES:
+                        raise ValueError("Couldn't tell what kind of match this is — pick the type above and scan again.")
+
+                status.update(label="Extracting dates…")
+                prompt = MATCH_TYPES[match_type]["prompt"]
+                if force:
+                    ask_gemini.clear(prompt, page_text, gemini_key)
+                data = ask_gemini(prompt, page_text, gemini_key)
+            except requests.HTTPError as e:
+                status.update(label="Scan failed", state="error")
+                st.error(f"The ticket page returned an error ({e.response.status_code}). Check the URL.")
+            except requests.RequestException as e:
+                status.update(label="Scan failed", state="error")
+                st.error(f"Could not load the ticket page: {e}")
+            except json.JSONDecodeError:
+                status.update(label="Scan failed", state="error")
+                st.error("Gemini returned something that wasn't valid JSON. Try scanning again.")
+            except Exception as e:
+                status.update(label="Scan failed", state="error")
+                st.error(f"Failed to automatically pull details: {e}")
             else:
-                errors.append(f"Failed to queue '{t['title']}': {msg}")
-            prog.progress((idx + 1) / len(to_send))
-        st.session_state[f"bufmsg_{prefix}"] = (ok_count, len(to_send), errors)
-        st.rerun()
-
-    result = st.session_state.pop(f"bufmsg_{prefix}", None)
-    if result:
-        ok_count, total, errors = result
-        for err in errors:
-            st.error(err)
-        if ok_count:
-            st.success(f"🎉 Successfully scheduled {ok_count}/{total} {label} reminders to Buffer!")
+                load_match(match_type, data, url)
+                status.update(label=f"Scanned — {MATCH_TYPES[match_type]['label']}", state="complete")
 
 
-def render_timeline(tweets, cal_prefix, heading):
-    st.markdown(f"### 🐦 {heading}")
-    for t in tweets:
-        length = tweet_length(t["text"])
-        flag = " ⚠️" if length > TWEET_LIMIT else ""
-        with st.expander(f"{t['title']} — *Scheduled: {t['when']}* · {length}/{TWEET_LIMIT}{flag}"):
-            st.code(t["text"], language="text")
-            if length > TWEET_LIMIT:
-                st.warning(f"About {length} characters — over X's {TWEET_LIMIT} limit. Trim it before posting.")
-            else:
-                st.caption(f"≈ {length}/{TWEET_LIMIT} characters (URLs count as 23, emoji and • as 2)")
-            c1, c2 = st.columns(2)
-            with c1:
-                st.link_button("🌐 Post on X", get_x_intent_url(t["text"]), width="stretch")
-            with c2:
-                dt = parse_to_datetime(t["when"])
-                if dt:
-                    st.link_button(
-                        "📅 Add to Google Calendar", gcal_url(f"{cal_prefix}: {t['title']}", dt), width="stretch"
-                    )
+# ==========================================
+# STEP 2 — DETAILS
+# ==========================================
+def render_details_step(match):
+    cfg = MATCH_TYPES[match["type"]]
+    data = match["data"]
+    sid = st.session_state.scan_id
 
+    st.markdown("#### 2 · Check the details")
+    detected = "Detected" if match["url"] else "Type"
+    st.caption(f"{detected}: **{cfg['label']}**. Wrong type? Pick the right one above and scan again.")
 
-def render_calendar(events):
-    st.markdown("### 📅 Master Calendar Schedule Links (Exact Event Times)")
-    for ev in events:
-        dt = parse_to_datetime(ev["time"])
-        if dt:
-            st.link_button(
-                f"📅 Add **{ev['label']}** ({ev['time']})",
-                gcal_url(ev["name"], dt, is_all_day=ev["all_day"]),
-                width="stretch",
+    details = {}
+    with st.container(border=True):
+        details["name"] = st.text_input("Opponent", value=data.get("match_name", "") or "", key=f"name_{sid}")
+        if match["type"] == "cup_home":
+            details["competition"] = st.text_input(
+                "Competition", value=data.get("competition", "") or "League Cup", key=f"comp_{sid}"
             )
 
+    with st.container(border=True):
+        st.markdown("**🗓️ Key dates**")
+        st.caption("Tap a cell to change it. Clear a date to mark it TBA. Tick *All day* for dates with no time.")
+        dates = st.data_editor(
+            match["dates_df"],
+            key=f"dates_{sid}",
+            hide_index=True,
+            width="stretch",
+            num_rows="fixed",
+            column_config={
+                "Event": st.column_config.TextColumn(disabled=True, width=104),
+                "All day": st.column_config.CheckboxColumn("All day", width=76),
+                "Date & time": st.column_config.DatetimeColumn(format="ddd D MMM, h:mma", step=60, width=160),
+            },
+        )
+        for key, _, _ in cfg["dates"]:
+            details[key] = to_display(dt_or_none(dates.at[key, "Date & time"]), bool(dates.at[key, "All day"]))
 
-def render_outputs(prefix, label, timeline_heading, cal_prefix, events):
-    tweets = st.session_state.get(f"tweets_{prefix}")
-    if not tweets:
-        return
     with st.container(border=True):
-        render_buffer_section(prefix, tweets, label)
-        render_timeline(tweets, cal_prefix, timeline_heading)
-    with st.container(border=True):
-        render_calendar(events)
+        st.markdown("**🎟️ Sale tiers**")
+        st.caption("Add or remove rows with the table controls. Empty = TBA. Swipe the table sideways to see every column.")
+        dt_col = st.column_config.DatetimeColumn(format="ddd D MMM, h:mma", step=60, width="small")
+        column_config = {"Tier": st.column_config.TextColumn(required=True, width="small"), "Opens": dt_col, "Closes": dt_col}
+        if "Forwarding deadline" in match["sales_df"]:
+            column_config["Forwarding deadline"] = dt_col
+        sales_df = st.data_editor(
+            match["sales_df"],
+            key=f"sales_{sid}",
+            hide_index=True,
+            width="stretch",
+            num_rows="dynamic",
+            column_config=column_config,
+        )
+        sales = []
+        for _, row in sales_df.iterrows():
+            tier = row.get("Tier")
+            if tier is None or pd.isna(tier) or not str(tier).strip():
+                continue
+            sale = {
+                "tier": str(tier).strip(),
+                "open": to_display(dt_or_none(row.get("Opens"))),
+                "close": to_display(dt_or_none(row.get("Closes"))),
+            }
+            if "Info" in sales_df:
+                info = row.get("Info")
+                sale["info"] = "" if info is None or pd.isna(info) else str(info)
+            if "Forwarding deadline" in sales_df:
+                sale["forwarding_deadline"] = to_display(dt_or_none(row.get("Forwarding deadline")))
+            sales.append(sale)
+        details["sales"] = sales
+        if not sales:
+            st.warning("No sale tiers yet — add at least one row.")
+
+    if match["type"] == "pl_home":
+        with st.container(border=True):
+            auto_hallmap = get_hallmap_link(details["name"], details["match_date"])
+            override = st.text_input("Hallmap link (optional override)", key=f"hallmap_{sid}", placeholder=auto_hallmap)
+            details["hallmap_url"] = override.strip() or auto_hallmap
+            st.caption(f"Using: {details['hallmap_url']}")
+
+    return details
 
 
 # ==========================================
-# APP SETUP
+# STEP 3 — TWEETS
+# ==========================================
+def _short_hash(text):
+    return hashlib.md5(text.encode()).hexdigest()[:10]
+
+
+def render_tweets_step(tweets, cal_prefix):
+    """Shows each tweet in an editable box. Returns the tweets with final text + include flags."""
+    sid = st.session_state.scan_id
+    st.markdown("#### 3 · Review tweets")
+    st.caption(
+        "Tweets update automatically as you change the details. You can edit any text here — "
+        "edits are kept until you change a detail that tweet depends on."
+    )
+
+    final = []
+    for i, t in enumerate(tweets):
+        generated_length = tweet_length(t["text"])
+        flag = " ⚠️" if generated_length > TWEET_LIMIT else ""
+        with st.expander(f"{t['title']} · {t['when']}{flag}", expanded=(i == 0)):
+            text = st.text_area(
+                "Tweet text",
+                value=t["text"],
+                key=f"tw_{sid}_{i}_{_short_hash(t['text'])}",
+                height=220,
+                label_visibility="collapsed",
+            )
+            length = tweet_length(text)
+            if length > TWEET_LIMIT:
+                st.warning(f"About {length}/{TWEET_LIMIT} characters — too long for a standard X account (fine with X Premium).")
+            else:
+                st.caption(f"≈ {length}/{TWEET_LIMIT} characters (links count as 23, emoji and • as 2)")
+
+            include = True
+            if t["buffer"]:
+                include = st.checkbox("Include in Buffer schedule", value=True, key=f"inc_{sid}_{t['title']}")
+            else:
+                st.caption("Post this one yourself now with the button below — it isn't sent to Buffer.")
+
+            c1, c2 = st.columns(2)
+            c1.link_button("🌐 Post on X now", get_x_intent_url(text), width="stretch")
+            dt = parse_to_datetime(t["when"])
+            if dt:
+                c2.link_button("📅 Calendar reminder", gcal_url(f"{cal_prefix}: {t['title']}", dt), width="stretch")
+        final.append({**t, "text": text, "include": include})
+    return final
+
+
+# ==========================================
+# STEP 4 — SCHEDULE & CALENDAR
+# ==========================================
+def render_schedule_step(tweets, match_name, events):
+    st.markdown("#### 4 · Schedule & calendar")
+    scheduled = st.session_state.setdefault("scheduled_ids", set())
+    now = now_uk()
+
+    with st.container(border=True):
+        st.markdown("**⚡ Buffer**")
+        rows, to_send = [], []
+        for t in tweets:
+            if not t["buffer"]:
+                continue
+            dt = parse_to_datetime(t["when"])
+            length = tweet_length(t["text"])
+            tid = f"{match_name}|{t['title']}|{dt.isoformat() if dt else ''}"
+            if tid in scheduled:
+                status = "✅ Sent"
+            elif not t["include"]:
+                status = "⏸️ Off"
+            elif not dt:
+                status = "⏭️ TBA"
+            elif dt <= now:
+                status = "⏭️ Past"
+            elif length > TWEET_LIMIT:
+                status = f"⏭️ {length} chars"
+            else:
+                status = "🕒 Send"
+                to_send.append((t, dt, tid))
+            rows.append(
+                {
+                    "": status,
+                    "When (UK)": format_datetime(dt).replace(":00", "") if dt else TBA,
+                    "Tweet": t["title"],
+                    "UTC": buffer_due_at(dt)[11:16] if dt else "—",
+                }
+            )
+        if rows:
+            st.dataframe(rows, hide_index=True, width="stretch")
+            st.caption("🕒 will send · ✅ already sent · ⏸️ unticked · ⏭️ skipped (TBA, already passed or too long)")
+
+        buffer_ready = bool(secret("BUFFER_API_KEY") and secret("BUFFER_CHANNEL_ID"))
+        if st.button(
+            f"🚀 Schedule {len(to_send)} reminder(s) to Buffer",
+            type="primary",
+            width="stretch",
+            key="buffer_go",
+            disabled=not (to_send and buffer_ready),
+        ):
+            prog = st.progress(0.0)
+            ok_count, errors = 0, []
+            for idx, (t, dt, tid) in enumerate(to_send):
+                ok, msg = schedule_to_buffer(t["text"], dt)
+                if ok:
+                    ok_count += 1
+                    scheduled.add(tid)
+                else:
+                    errors.append(f"Failed to queue '{t['title']}': {msg}")
+                prog.progress((idx + 1) / len(to_send))
+            st.session_state.buffer_result = (ok_count, len(to_send), errors)
+            st.rerun()
+
+        result = st.session_state.pop("buffer_result", None)
+        if result:
+            ok_count, total, errors = result
+            for err in errors:
+                st.error(err)
+            if ok_count:
+                st.success(f"🎉 Scheduled {ok_count}/{total} reminders to Buffer!")
+        if not buffer_ready:
+            st.caption("Add BUFFER_API_KEY and BUFFER_CHANNEL_ID to your secrets to enable scheduling.")
+        else:
+            st.caption("Each reminder is only sent once per session. If you change a time after scheduling, delete the old post in Buffer.")
+
+    with st.container(border=True):
+        st.markdown("**📅 Calendar**")
+        dated = [ev for ev in events if parse_to_datetime(ev["time"])]
+        slug = re.sub(r"[^a-z0-9]+", "-", match_name.lower()).strip("-") or "match"
+        st.download_button(
+            f"📥 Download all {len(dated)} dates (.ics)",
+            data=build_ics(dated),
+            file_name=f"lfc-{slug}-dates.ics",
+            mime="text/calendar",
+            width="stretch",
+            disabled=not dated,
+        )
+        st.caption("Opens in Apple Calendar, Outlook or Google Calendar and adds every date at once.")
+        with st.expander("Or add dates one at a time (Google Calendar)"):
+            for ev in dated:
+                st.link_button(
+                    f"📅 {ev['label']} ({ev['time']})",
+                    gcal_url(ev["name"], parse_to_datetime(ev["time"]), is_all_day=ev["all_day"]),
+                    width="stretch",
+                )
+
+
+# ==========================================
+# SIDEBAR
+# ==========================================
+def render_sidebar(gemini_key):
+    with st.sidebar:
+        st.markdown("### ⚙️ Setup")
+        checks = [
+            ("Gemini (scanning)", bool(gemini_key)),
+            ("Buffer API key", bool(secret("BUFFER_API_KEY"))),
+            ("Buffer channel", bool(secret("BUFFER_CHANNEL_ID"))),
+        ]
+        for label, ok in checks:
+            st.markdown(f"{'✅' if ok else '❌'} {label}")
+        st.caption(f"UK time now: {format_datetime(now_uk())}")
+        st.divider()
+        scheduled = len(st.session_state.get("scheduled_ids", ()))
+        st.markdown(f"**{scheduled}** reminder(s) scheduled this session")
+        if st.button("🔄 Start a new match", width="stretch"):
+            start_over()
+            st.rerun()
+
+
+# ==========================================
+# APP
 # ==========================================
 st.set_page_config(page_title="LFC Alerts & Scheduler", page_icon="🔴", layout="centered")
 
-gemini_api_key = st.secrets.get("GEMINI_API_KEY")
-if not gemini_api_key:
-    st.error("⚠️ GEMINI_API_KEY is missing from Streamlit Secrets. Please add it to your dashboard to continue.")
-    st.stop()
+gemini_api_key = secret("GEMINI_API_KEY")
+render_sidebar(gemini_api_key)
 
-st.title("🔴 LFC Ticket Alerts & Tweet Scheduler")
-st.markdown("Automate your custom sale templates, scheduled tweet timelines, and calendar schedules instantly.")
-st.write("")
+st.markdown("## 🔴 LFC Ticket Alerts")
+st.caption("Scan a ticket page → check the dates → review tweets → schedule to Buffer and your calendar.")
 
-tab1, tab2, tab3, tab4 = st.tabs(["🏆 Premier League (Home)", "🏅 Cup Games (Home)", "✈️ League Aways", "🇪🇺 CL Aways"])
+render_scan_step(gemini_api_key)
 
-# ==========================================
-# TAB 1: PREMIER LEAGUE HOME GAMES
-# ==========================================
-with tab1:
-    d = scan_section("pl", "🔗 Ticket Page URL (PL):", "Scan PL Page 🔍", "Analyzing ticketing page...", PL_PROMPT, gemini_api_key)
+match = st.session_state.get("match")
+if match:
+    st.divider()
+    details = render_details_step(match)
+    cfg = MATCH_TYPES[match["type"]]
+    generated = cfg["tweets"](details)
+    events = cfg["events"](details)
 
-    if d:
-        st.write("")
-        st.subheader("⚙️ Refine Details")
-        with st.container(border=True):
-            name = st.text_input("Opponent Team Name", value=d.get("match_name", ""), key="pl_m_name")
+    st.divider()
+    final_tweets = render_tweets_step(generated, f"{details['name']} {cfg['suffix']}")
 
-        with st.container(border=True):
-            st.markdown("#### 📝 Registration & Links")
-            r_open = editable_date_row("Registration Opens", d.get("reg_open", ""), "pl_r_open")
-            r_close = editable_date_row("Registration Closes", d.get("reg_close", ""), "pl_r_close")
-            l_sent = editable_date_row("Links Sent", d.get("links_sent", ""), "pl_l_sent")
-
-        with st.container(border=True):
-            st.markdown("#### 🎟️ Tiered Ticket Sales")
-            sales = sale_tier_inputs("pl", d.get("sales", []))
-
-        with st.container(border=True):
-            st.markdown("#### 🗳️ Local & YA Ballots")
-            b_open = editable_date_row("Ballots Open", d.get("ballot_open", ""), "pl_b_open")
-            b_close = editable_date_row("Ballots Close", d.get("ballot_close", ""), "pl_b_close")
-            b_res = editable_date_row("Ballots Results", d.get("ballot_results", TBA), "pl_b_res")
-
-        with st.container(border=True):
-            st.markdown("#### 🏟️ Match Details")
-            m_date = editable_date_row("Match Date & Time", d.get("match_date", ""), "pl_m_date")
-            auto_hallmap = get_hallmap_link(name, m_date)
-            hallmap_override = st.text_input(
-                "Hallmap link override (optional)", key="pl_hallmap", placeholder=auto_hallmap
-            )
-            hallmap_url = hallmap_override.strip() or auto_hallmap
-            st.caption(f"Hallmap link used: {hallmap_url}")
-
-        st.write("")
-        if st.button("Generate PL Tweet Timelines & Calendars 🚀", type="primary", width="stretch", key="pl_gen"):
-            sales_text = "".join(f"• {s['tier']}: {s['open']}\n" for s in sales)
-            first_sale = sales[0]["open"] if sales else TBA
-
-            announcement = f"""{name} (H) - Sale Details 📢\n\nRegistration (All Members) 📝\n• Opens: {r_open}\n• Closes: {r_close}\n• Sale links sent: {l_sent}\n\nSales 🎟️\n{sales_text}\nLocal & YA Ballots 🗳️\n• Opens: {b_open}\n• Closes: {b_close}\n• Results: {b_res}\n\nMatch Date • {m_date} 🏟️"""
-            reg_open_tweet = f"""{name} (H) - Registration 📢\n\nRegistration (All Members) 📝\n• Opens: Now\n• Closes: {r_close}\n\n• Sale links sent: {l_sent}\n\nSale 🎟️\n• {first_sale}"""
-            reg_close_tweet = f"""{name} (H) - Registration 📢\n\nRegistration (All Members) 📝\n• Opens: Now\n• Closes: {today_label(r_close)}\n\n• Sale links sent: {l_sent}\n\nSale 🎟️\n• {first_sale}"""
-            ballots_open_tweet = f"""{name} (H) - Ballots 📢\n\nLocal Ballots & YA Ballot 🗳️\n• Opens: Now\n• Closes: {b_close}\n\n• Results: {b_res}\n\n{BALLOTS_URL}"""
-            ballots_close_tweet = f"""{name} (H) - Ballots 📢\n\nLocal Ballots & YA Ballot 🗳️\n• Opens: Now\n• Closes: {today_label(b_close)}\n\n• Results: {b_res}\n\n{BALLOTS_URL}"""
-            ballots_res_tweet = f"""{name} (H) - Local & YA Ballots 📢\n\nLocal & YA Ballot Results 🗳️\n• Results today\n• Ensure you have funds in your bank \n\nComment below if successful 👇"""
-
-            tweets = [
-                tweet("📢 Sales Detail Announcement", IMMEDIATE, announcement, buffer=False),
-                tweet("📝 Registration Opening Notice", r_open, reg_open_tweet),
-                tweet("⏰ Registration Closing Reminder", get_offset_time(r_close, 1), reg_close_tweet),
-                tweet("🗳️ Ballots Opening", b_open, ballots_open_tweet),
-                tweet("⏰ Ballots Closing Reminder", get_offset_time(b_close, 1), ballots_close_tweet),
-                tweet("✨ Local & YA Ballot Results", get_results_day_morning(b_res), ballots_res_tweet),
-            ]
-            for s in sales:
-                link_time = get_offset_time(s["open"], hours_before=0.5)
-                rem_tweet = f"""{name} (H) - {s['tier']} 📢\n\n{s['tier']} 🎟️\n• Opens: {today_label(s['open'])}\n• Click unique links from {link_time}\n\nHallmap link  👇\n{hallmap_url}"""
-                tweets.append(tweet(f"🎟️ Sale Opening ({s['tier']})", get_offset_time(s["open"], 1), rem_tweet))
-                close = sale_close_reminder(f"{name} (H)", s["tier"], s["close"])
-                if close:
-                    tweets.append(close)
-            st.session_state["tweets_pl"] = tweets
-
-        p = f"{name} (H)"
-        render_outputs(
-            "pl",
-            "PL",
-            "Scheduled Tweet Timeline",
-            p,
-            [
-                event("Registration Open", f"{p} - Registration Opens", r_open),
-                event("Registration Closes", f"{p} - Registration Closes", r_close),
-                event("Unique Links Sent", f"{p} - Unique Links Sent", l_sent),
-                event("Ballots Open", f"{p} - Ballots Open", b_open),
-                event("Ballots Close", f"{p} - Ballots Close", b_close),
-                event("Ballots Results", f"{p} - Ballots Results", b_res, all_day=True),
-                *sale_events(p, sales),
-                event("Match Day", f"{p} - Match Date", m_date),
-            ],
-        )
-
-
-# ==========================================
-# TAB 2: CUP GAMES
-# ==========================================
-with tab2:
-    cd = scan_section(
-        "cup",
-        "🔗 Ticket Page URL (Cup/European Home):",
-        "Scan Cup Page 🔍",
-        "Analyzing Cup/European ticketing page...",
-        CUP_PROMPT,
-        gemini_api_key,
-    )
-
-    if cd:
-        st.write("")
-        st.subheader("⚙️ Refine Details")
-        name = st.text_input("Opponent Team Name", value=cd.get("match_name", ""), key="cup_m_name")
-        comp = st.text_input("Competition Type", value=cd.get("competition", "League Cup"), key="cup_comp")
-
-        with st.container(border=True):
-            st.markdown("#### 🎟️ Tiered Sales")
-            sales = sale_tier_inputs("cup", cd.get("sales", []))
-
-        with st.container(border=True):
-            st.markdown("#### 🗳️ Local Ballot")
-            b_open = editable_date_row("Local Ballot Opens", cd.get("ballot_open", ""), "cup_b_open")
-            b_close = editable_date_row("Local Ballot Closes", cd.get("ballot_close", ""), "cup_b_close")
-            b_res = editable_date_row("Local Ballot Results", cd.get("ballot_results", TBA), "cup_b_res")
-
-        with st.container(border=True):
-            st.markdown("#### 💰 Auto Cup Scheme & Match Details")
-            acs_start = editable_date_row("ACS Payment Start", cd.get("acs_start", ""), "cup_acs_start")
-            acs_end = editable_date_row("ACS Payment End", cd.get("acs_end", ""), "cup_acs_end")
-            m_date = editable_date_row("Match Date & Time", cd.get("match_date", ""), "cup_m_date")
-
-        st.write("")
-        if st.button("Generate Cup Tweet Timelines & Calendars 🚀", type="primary", width="stretch", key="cup_gen"):
-            sales_text = "".join(f"Sale ({s['tier']})\n• Opens: {s['open']}\n• Closes: {s['close']}\n\n" for s in sales)
-            announcement = f"""{name} (H) - Sale Details 📢\n\n{sales_text}Local Ballot 🗳️\n• Opens: {b_open}\n• Closes: {b_close}\n• Results: {b_res}\n\nACS Payment Run 💰\n• {acs_start} - {acs_end}\n\nMatch Date • {m_date} 🏟️"""
-
-            tweets = [
-                tweet("📢 Cup Sales Announcement", IMMEDIATE, announcement, buffer=False),
-                tweet(
-                    "🗳️ Local Ballot Opening",
-                    b_open,
-                    f"""{name} (H) - Local Ballot 📢\n\nLocal Ballot 🗳️\n• Opens: Now\n• Closes: {b_close}\n\n{BALLOTS_URL}""",
-                ),
-                tweet(
-                    "⏰ Local Ballot Closing",
-                    get_offset_time(b_close, 1),
-                    f"""{name} (H) - Local Ballot 📢\n\nLocal Ballot 🗳️\n• Opens: Now\n• Closes: {today_label(b_close)}\n\n{BALLOTS_URL}""",
-                ),
-            ]
-            for s in sales:
-                open_tweet = f"""{name} ({comp})  🎟️\n\nSale ({s['tier']})\n• Opens: {today_label(s['open'])}\n• Closes: {s['close']}\n\nNo registration needed, pre-queue starts 30 minutes before."""
-                tweets.append(tweet(f"🎟️ Sale Opening ({s['tier']})", get_offset_time(s["open"], 1), open_tweet))
-                close = sale_close_reminder(f"{name} ({comp})", s["tier"], s["close"])
-                if close:
-                    tweets.append(close)
-            st.session_state["tweets_cup"] = tweets
-
-        p = f"{name} (H)"
-        render_outputs(
-            "cup",
-            "Cup",
-            "Scheduled Cup Tweet Timeline",
-            p,
-            [
-                event("Local Ballot Opens", f"{p} - Local Ballot Opens", b_open),
-                event("Local Ballot Closes", f"{p} - Local Ballot Closes", b_close),
-                event("Local Ballot Results", f"{p} - Local Ballot Results", b_res, all_day=True),
-                event("ACS Payment Start", f"{p} - ACS Payment Start", acs_start, all_day=True),
-                event("ACS Payment End", f"{p} - ACS Payment End", acs_end, all_day=True),
-                *sale_events(p, sales),
-                event("Match Day", f"{p} - Match Date", m_date),
-            ],
-        )
-
-
-# ==========================================
-# TAB 3: LEAGUE AWAYS
-# ==========================================
-with tab3:
-    ad = scan_section(
-        "away", "🔗 Ticket Page URL (Away):", "Scan Away Page 🔍", "Analyzing Away ticketing page...", AWAY_PROMPT, gemini_api_key
-    )
-
-    if ad:
-        st.write("")
-        st.subheader("⚙️ Refine Details")
-        with st.container(border=True):
-            name = st.text_input("Opponent Team Name", value=ad.get("match_name", ""), key="away_m_name")
-            fwd = editable_date_row("Forwarding Deadline", ad.get("forwarding_deadline", TBA), "away_fwd")
-
-        with st.container(border=True):
-            st.markdown("#### 🎟️ Tiered Sales")
-            sales = sale_tier_inputs("away", ad.get("sales", []))
-
-        with st.container(border=True):
-            st.markdown("#### 🏟️ Match Details")
-            m_date = editable_date_row("Match Date & Time", ad.get("match_date", ""), "away_m_date")
-
-        st.write("")
-        if st.button("Generate Away Tweet Timelines & Calendars 🚀", type="primary", width="stretch", key="away_gen"):
-            blocks = "\n\n".join(f"Sale ({s['tier']})\n• Opens: {s['open']}\n• Closes: {s['close']}" for s in sales)
-            announcement = f"""{name} (A) - Sale Details 📢\n\n{blocks}\n\nMatch Date • {m_date} 🏟️"""
-
-            tweets = [tweet("📢 Sales Detail Announcement", IMMEDIATE, announcement, buffer=False)]
-            for s in sales:
-                sale_tweet = f"""{name} (A) 🎟️\n\nSale ({s['tier']})\n• Opens: {today_label(s['open'])}\n• Closes: {s['close']}\n• Guaranteed Sale"""
-                tweets.append(tweet(f"🎟️ Sale Opening ({s['tier']})", get_offset_time(s["open"], 1), sale_tweet))
-                close = sale_close_reminder(f"{name} (A)", s["tier"], s["close"])
-                if close:
-                    tweets.append(close)
-
-            if is_set(fwd):
-                fwd_tweet = f"""Forwarding Deadline ➡️\n• Closes: {today_label(fwd)}"""
-                tweets.append(tweet("➡️ Forwarding Deadline", get_offset_time(fwd, 1), fwd_tweet))
-            st.session_state["tweets_away"] = tweets
-
-        p = f"{name} (A)"
-        away_events = sale_events(p, sales)
-        if is_set(fwd):
-            away_events.append(event("Forwarding Deadline", f"{p} - Forwarding Deadline", fwd))
-        away_events.append(event("Match Day", f"{p} - Match Date", m_date))
-        render_outputs("away", "Away", "Scheduled Away Tweet Timeline", p, away_events)
-
-
-# ==========================================
-# TAB 4: CHAMPIONS LEAGUE AWAYS
-# ==========================================
-with tab4:
-    cld = scan_section(
-        "cl",
-        "🔗 Ticket Page URL (CL Away):",
-        "Scan CL Away Page 🔍",
-        "Analyzing Champions League Away page...",
-        CL_PROMPT,
-        gemini_api_key,
-    )
-
-    if cld:
-        st.write("")
-        st.subheader("⚙️ Refine Details")
-        with st.container(border=True):
-            name = st.text_input("Opponent Team Name", value=cld.get("match_name", ""), key="cl_m_name")
-
-        def cl_extra(i, sale):
-            return {
-                "info": st.text_input("Information / Guarantee", value=sale.get("info", "") or "", key=f"cl_tier_info_{i}"),
-                "forwarding_deadline": editable_date_row(
-                    "Forwarding Deadline", sale.get("forwarding_deadline", TBA), f"cl_tier_fwd_{i}"
-                ),
-            }
-
-        with st.container(border=True):
-            st.markdown("#### 🎟️ Tiered Sales & Forwarding Deadlines")
-            sales = sale_tier_inputs("cl", cld.get("sales", []), extra=cl_extra)
-
-        with st.container(border=True):
-            st.markdown("#### 🏟️ Match Details")
-            m_date = editable_date_row("Match Date & Time", cld.get("match_date", ""), "cl_m_date")
-
-        st.write("")
-        if st.button("Generate CL Away Tweet Timelines & Calendars 🚀", type="primary", width="stretch", key="cl_gen"):
-            blocks = []
-            for s in sales:
-                info = s["info"].strip()
-                if "guaranteed" in info.lower() and "non" not in info.lower():
-                    info_tag = " - Guaranteed"
-                elif info:
-                    info_tag = f" - {info}"
-                else:
-                    info_tag = ""
-                blocks.append(f"Sale ({s['tier']}{info_tag})\n• Opens: {s['open']}\n• Closes: {s['close']}")
-            blocks_text = "\n\n".join(blocks)
-            announcement = f"""{name} (A) - Sale Details 📢\n\n{blocks_text}\n\nMatch Date • {m_date} 🏟️"""
-
-            tweets = [tweet("📢 CL Away Sales Details Announcement", IMMEDIATE, announcement, buffer=False)]
-            for s in sales:
-                info_line = f"• {s['info'].strip()}\n" if s["info"].strip() else ""
-                sale_tweet = f"""{name} (A) 🎟️\n\nSale ({s['tier']})\n• Opens: {today_label(s['open'])}\n• Closes: {s['close'].replace(',', ' -')}\n{info_line}"""
-                tweets.append(tweet(f"🎟️ Sale Opening ({s['tier']})", get_offset_time(s["open"], 1), sale_tweet))
-                close = sale_close_reminder(f"{name} (A)", s["tier"], s["close"])
-                if close:
-                    tweets.append(close)
-                fwd = s.get("forwarding_deadline")
-                if is_set(fwd):
-                    fwd_tweet = f"""{name} (A) ➡️\n\nForwarding Deadline ({s['tier']})\n• Closes: {today_label(fwd)}"""
-                    tweets.append(tweet(f"➡️ Forwarding Deadline ({s['tier']})", get_offset_time(fwd, 1), fwd_tweet))
-            st.session_state["tweets_cl"] = tweets
-
-        p = f"{name} (A)"
-        cl_events = sale_events(p, sales)
-        for s in sales:
-            if is_set(s.get("forwarding_deadline")):
-                cl_events.append(
-                    event(f"Forwarding Deadline ({s['tier']})", f"{p} - Forwarding Deadline ({s['tier']})", s["forwarding_deadline"])
-                )
-        cl_events.append(event("Match Day", f"{p} - Match Date", m_date))
-        render_outputs("cl", "CL", "Scheduled CL Away Tweet Timeline", p, cl_events)
+    st.divider()
+    render_schedule_step(final_tweets, details["name"], events)

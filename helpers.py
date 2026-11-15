@@ -5,6 +5,7 @@ that is how the LFC ticketing pages publish them. Conversion to UTC only
 happens at the edge, when talking to Buffer.
 """
 
+import hashlib
 import re
 import urllib.parse
 from datetime import date, datetime, timedelta
@@ -145,6 +146,19 @@ def today_label(date_str, hours_before=1):
     return date_str
 
 
+def has_time(date_str):
+    """True if the string includes a clock time (as opposed to a bare date)."""
+    s = str(date_str or "").lower()
+    return any(m in s for m in ("am", "pm", ":"))
+
+
+def to_display(dt, all_day=False):
+    """Inverse of parse_to_datetime: datetime -> "Wed 23 Sep, 8:15am" / "Wed 23 Sep" / "TBA"."""
+    if dt is None:
+        return TBA
+    return format_date(dt) if all_day else format_datetime(dt)
+
+
 def is_set(value):
     return bool(value) and str(value).strip().upper() != TBA
 
@@ -187,6 +201,48 @@ def gcal_url(title, dt, is_all_day=False):
         "https://calendar.google.com/calendar/render?action=TEMPLATE"
         f"&text={urllib.parse.quote(title)}&dates={dates}&ctz=Europe/London"
     )
+
+
+def _ics_escape(text):
+    return text.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
+
+
+def _ics_fold(line):
+    """RFC 5545 line folding (75 octets max)."""
+    out, current = [], ""
+    for ch in line:
+        if len((current + ch).encode()) > 74:
+            out.append(current)
+            current = " " + ch
+        else:
+            current += ch
+    out.append(current)
+    return "\r\n".join(out)
+
+
+def build_ics(events):
+    """One .ics file with every dated event, so the whole schedule imports in one go."""
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//LFC Alerts//Tweet Scheduler//EN",
+        "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH",
+    ]
+    for ev in events:
+        dt = parse_to_datetime(ev["time"])
+        if not dt:
+            continue
+        uid = hashlib.sha1(f"{ev['name']}|{dt.isoformat()}".encode()).hexdigest()
+        lines += ["BEGIN:VEVENT", f"UID:{uid}@lfc-alerts", f"DTSTAMP:{stamp}", f"SUMMARY:{_ics_escape(ev['name'])}"]
+        if ev.get("all_day"):
+            lines += [f"DTSTART;VALUE=DATE:{dt:%Y%m%d}", f"DTEND;VALUE=DATE:{(dt + timedelta(days=1)):%Y%m%d}"]
+        else:
+            lines += [f"DTSTART:{uk_to_utc(dt):%Y%m%dT%H%M%SZ}", f"DTEND:{uk_to_utc(dt):%Y%m%dT%H%M%SZ}"]
+        lines.append("END:VEVENT")
+    lines.append("END:VCALENDAR")
+    return "\r\n".join(_ics_fold(line) for line in lines) + "\r\n"
 
 
 # Opponent names as the LFC ticketing site spells them in event URLs.
