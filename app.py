@@ -101,7 +101,8 @@ def schedule_to_buffer(text, scheduled_at_local):
 
 @st.cache_resource
 def get_gemini_client(api_key):
-    return genai.Client(api_key=api_key)
+    # JSON response mode is only available on the v1beta API (the library defaults to v1).
+    return genai.Client(api_key=api_key, http_options=types.HttpOptions(api_version="v1beta"))
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -125,11 +126,20 @@ def fetch_page_text(url):
 @st.cache_data(ttl=600, show_spinner=False)
 def ask_gemini(prompt_template, page_text, _api_key):
     prompt = prompt_template.replace("<<PAGE_TEXT>>", page_text)
-    ai_response = get_gemini_client(_api_key).models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0),
-    )
+    client = get_gemini_client(_api_key)
+    try:
+        ai_response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0),
+        )
+    except Exception as e:
+        if "json mode" not in str(e).lower():
+            raise
+        # Fallback: plain text reply; the prompt already demands JSON and fences are stripped below.
+        ai_response = client.models.generate_content(
+            model=GEMINI_MODEL, contents=prompt, config=types.GenerateContentConfig(temperature=0)
+        )
     data = json.loads(strip_json_fences(ai_response.text or ""))
     if not isinstance(data, dict):
         raise ValueError("Gemini did not return a JSON object.")
