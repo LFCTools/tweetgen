@@ -237,6 +237,15 @@ def render_scan_step(gemini_key):
             load_match(chosen, {})
             st.toast("Blank form ready — fill in the details below.")
 
+    with st.expander("Scan keeps failing? Paste the page text instead"):
+        st.caption(
+            "Open the ticket page on your phone or computer, select all the text (Ctrl/Cmd + A), "
+            "copy it and paste it here. This skips downloading the page, so it works even if the "
+            "LFC site blocks the app."
+        )
+        pasted = st.text_area("Page text", key="pasted_text", height=150, label_visibility="collapsed")
+        scan_pasted = st.button("🔍 Scan pasted text", width="stretch", disabled=not gemini_key, key="scan_pasted")
+
     if scan:
         url = (url or "").strip()
         if not url:
@@ -245,42 +254,76 @@ def render_scan_step(gemini_key):
         if not url.startswith(("http://", "https://")):
             st.error("The URL must start with http:// or https://")
             return
-        with st.status("Scanning ticket page…", expanded=False) as status:
-            try:
+        run_scan(chosen, gemini_key, url=url, force=force)
+
+    if scan_pasted:
+        text = " ".join((pasted or "").split())
+        if len(text) < MIN_PAGE_TEXT:
+            st.error("That doesn't look like the full page — paste all of the ticket page text.")
+            return
+        run_scan(chosen, gemini_key, page_text=text[:PAGE_TEXT_LIMIT])
+
+
+def describe_error(step, e):
+    if isinstance(e, requests.HTTPError):
+        code = e.response.status_code if e.response is not None else "?"
+        if code in (401, 403, 429):
+            return (
+                f"The LFC site refused the request (HTTP {code}) — it is probably blocking automated "
+                "downloads from the app's server. Use **Paste the page text instead** below the Scan button."
+            )
+        if code == 404:
+            return "The ticket page wasn't found (HTTP 404). Check the URL."
+        return f"The ticket page returned an error (HTTP {code})."
+    if isinstance(e, requests.Timeout):
+        return "The LFC site took too long to respond. Try again, or paste the page text instead."
+    if isinstance(e, requests.RequestException):
+        return f"Could not load the ticket page: {e}"
+    if isinstance(e, json.JSONDecodeError):
+        return "Gemini returned something that wasn't valid JSON. Try scanning again."
+    msg = str(e)
+    if "gemini" in step.lower() and any(k in msg.lower() for k in ("api key", "api_key", "permission", "unauthenticated")):
+        return f"Gemini rejected the API key — check GEMINI_API_KEY in your Streamlit secrets. ({msg})"
+    if "gemini" in step.lower() and any(k in msg.lower() for k in ("quota", "429", "resource_exhausted")):
+        return f"Gemini's usage limit was hit — wait a minute and try again. ({msg})"
+    return f"{type(e).__name__}: {msg}"
+
+
+def run_scan(chosen, gemini_key, url=None, page_text=None, force=False):
+    step = "downloading the page"
+    error = None
+    with st.status("Scanning ticket page…", expanded=False) as status:
+        try:
+            if page_text is None:
                 if force:
                     fetch_page_text.clear(url)
                 status.update(label="Downloading page…")
                 page_text = fetch_page_text(url)
 
-                match_type = chosen
-                if match_type == AUTO:
-                    status.update(label="Working out the match type…")
-                    if force:
-                        ask_gemini.clear(CLASSIFY_PROMPT, page_text, gemini_key)
-                    match_type = ask_gemini(CLASSIFY_PROMPT, page_text, gemini_key).get("match_type")
-                    if match_type not in MATCH_TYPES:
-                        raise ValueError("Couldn't tell what kind of match this is — pick the type above and scan again.")
-
-                status.update(label="Extracting dates…")
-                prompt = MATCH_TYPES[match_type]["prompt"]
+            match_type = chosen
+            if match_type == AUTO:
+                step = "asking Gemini for the match type"
+                status.update(label="Working out the match type…")
                 if force:
-                    ask_gemini.clear(prompt, page_text, gemini_key)
-                data = ask_gemini(prompt, page_text, gemini_key)
-            except requests.HTTPError as e:
-                status.update(label="Scan failed", state="error")
-                st.error(f"The ticket page returned an error ({e.response.status_code}). Check the URL.")
-            except requests.RequestException as e:
-                status.update(label="Scan failed", state="error")
-                st.error(f"Could not load the ticket page: {e}")
-            except json.JSONDecodeError:
-                status.update(label="Scan failed", state="error")
-                st.error("Gemini returned something that wasn't valid JSON. Try scanning again.")
-            except Exception as e:
-                status.update(label="Scan failed", state="error")
-                st.error(f"Failed to automatically pull details: {e}")
-            else:
-                load_match(match_type, data, url)
-                status.update(label=f"Scanned — {MATCH_TYPES[match_type]['label']}", state="complete")
+                    ask_gemini.clear(CLASSIFY_PROMPT, page_text, gemini_key)
+                match_type = ask_gemini(CLASSIFY_PROMPT, page_text, gemini_key).get("match_type")
+                if match_type not in MATCH_TYPES:
+                    raise ValueError("Couldn't tell what kind of match this is — pick the type above and scan again.")
+
+            step = "asking Gemini for the dates"
+            status.update(label="Extracting dates…")
+            prompt = MATCH_TYPES[match_type]["prompt"]
+            if force:
+                ask_gemini.clear(prompt, page_text, gemini_key)
+            data = ask_gemini(prompt, page_text, gemini_key)
+        except Exception as e:
+            error = describe_error(step, e)
+            status.update(label=f"Scan failed while {step}", state="error")
+        else:
+            load_match(match_type, data, url)
+            status.update(label=f"Scanned — {MATCH_TYPES[match_type]['label']}", state="complete")
+    if error:
+        st.error(error)
 
 
 # ==========================================
