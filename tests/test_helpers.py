@@ -165,3 +165,13 @@ def test_strip_json_fences():
 def test_find_acs_dates(text, expected):
     from helpers import find_acs_dates
     assert find_acs_dates(text, today=TODAY) == expected
+
+
+def test_qstash_label():
+    from helpers import qstash_label
+    assert qstash_label("Everton (A)", "🎟️ Sale Opening (9+ Credit Balance)", "Mon 23 Nov, 9am") == \
+        "everton-a_sale-opening-9-credit-balance_mon-23-nov-9am"
+    assert qstash_label("Manchester United (H)") == "manchester-united-h"
+    assert qstash_label("Brighton & Hove Albion (H)", "📢 Sales Detail Announcement", "now") == \
+        "brighton-hove-albion-h_sales-detail-announcement_now"
+    assert len(qstash_label("x" * 200)) <= 100

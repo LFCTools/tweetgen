@@ -182,6 +182,12 @@ def find_acs_dates(text, today=None):
     return None, None
 
 
+def qstash_label(*parts, max_len=100):
+    """Readable, URL-safe label for QStash, e.g. "everton-a_sale-opening-9-credit-balance_mon-23-nov-9am"."""
+    slugs = [re.sub(r"[^a-z0-9]+", "-", str(p).lower()).strip("-") for p in parts]
+    return "_".join(s for s in slugs if s)[:max_len].rstrip("-_")
+
+
 def has_time(date_str):
     """True if the string includes a clock time (as opposed to a bare date)."""
     s = str(date_str or "").lower()

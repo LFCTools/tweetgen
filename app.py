@@ -20,6 +20,7 @@ importlib.reload(_helpers_module)
 importlib.reload(_templates_module)
 
 from helpers import (
+    qstash_label,
     uk_to_utc,
     find_acs_dates,
     is_set,
@@ -607,8 +608,11 @@ def render_tweets_step(tweets, cal_prefix):
 # ==========================================
 # STEP 4 — SCHEDULE & CALENDAR
 # ==========================================
-def schedule_to_discord(text, scheduled_at_local, image=None, immediate=False):
-    """Queue a Discord webhook post via QStash, delivered at `scheduled_at_local` (UK time)."""
+def schedule_to_discord(text, scheduled_at_local, image=None, immediate=False, labels=()):
+    """Queue a Discord webhook post via QStash, delivered at `scheduled_at_local` (UK time).
+
+    `labels` are shown against the message in the QStash console and can be used to filter its logs.
+    """
     token, webhook = secret("QSTASH_TOKEN"), secret("DISCORD_WEBHOOK_URL")
     if not token:
         return False, "QSTASH_TOKEN is missing from Streamlit secrets."
@@ -620,6 +624,8 @@ def schedule_to_discord(text, scheduled_at_local, image=None, immediate=False):
     if image:
         payload["embeds"] = [{"image": {"url": image}}]
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    if labels:
+        headers["Upstash-Label"] = ",".join(labels)
     if not immediate:
         headers["Upstash-Not-Before"] = str(int(uk_to_utc(scheduled_at_local).timestamp()))
     try:
@@ -635,8 +641,14 @@ def schedule_to_discord(text, scheduled_at_local, image=None, immediate=False):
         return False, str(e)
 
 
-def _buffer_send(text, dt, image, immediate):
+def _buffer_send(text, dt, image, t, match_label):
     return schedule_to_buffer(text, dt, image=image)
+
+
+def _discord_send(text, dt, image, t, match_label):
+    when = "now" if t["immediate"] else format_datetime(dt).replace(":00", "")
+    post_label = qstash_label(match_label, t["title"], when)
+    return schedule_to_discord(text, dt, image=image, immediate=t["immediate"], labels=(post_label, qstash_label(match_label)))
 
 
 CHANNELS = {
@@ -661,15 +673,15 @@ CHANNELS = {
         "length": len,
         "limit": lambda: DISCORD_LIMIT,
         "ready": lambda: bool(secret("QSTASH_TOKEN") and secret("DISCORD_WEBHOOK_URL")),
-        "send": schedule_to_discord,
+        "send": _discord_send,
         "caption": "Same posts without the X footer and hashtags. Delivered at the UK times shown via QStash.",
         "setup": "Add QSTASH_TOKEN, QSTASH_URL and DISCORD_WEBHOOK_URL to your secrets to enable Discord.",
-        "note": "Each post is only sent once per session. To cancel a scheduled Discord post, delete it under Messages in the QStash console.",
+        "note": "Each post is only sent once per session. In the QStash console each message is labelled with the match, post and time (filter by the match label, e.g. everton-a). Cancel a post there.",
     },
 }
 
 
-def render_channel(channel, tweets, match_name):
+def render_channel(channel, tweets, match_name, match_label):
     """Tick list + send button for one destination (Buffer or Discord)."""
     cfg = CHANNELS[channel]
     scheduled = st.session_state.setdefault(f"scheduled_{channel}", set())
@@ -726,7 +738,7 @@ def render_channel(channel, tweets, match_name):
             for idx, (t, text, dt, tid) in enumerate(to_send):
                 if t["immediate"]:
                     dt = now_uk() + timedelta(minutes=2)
-                ok, msg = cfg["send"](text, dt, image_url(t["image"]), t["immediate"])
+                ok, msg = cfg["send"](text, dt, image_url(t["image"]), t, match_label)
                 if ok:
                     ok_count += 1
                     scheduled.add(tid)
@@ -749,10 +761,10 @@ def render_channel(channel, tweets, match_name):
             st.caption(cfg["note"])
 
 
-def render_schedule_step(tweets, match_name, events):
+def render_schedule_step(tweets, match_name, events, match_label):
     st.markdown("#### 4 · Schedule & calendar")
     for channel in CHANNELS:
-        render_channel(channel, tweets, match_name)
+        render_channel(channel, tweets, match_name, match_label)
 
     with st.container(border=True):
         st.markdown("**📅 Calendar**")
@@ -825,4 +837,4 @@ if match:
     final_tweets = render_tweets_step(generated, f"{details['name']} {cfg['suffix']}")
 
     st.divider()
-    render_schedule_step(final_tweets, details["name"], events)
+    render_schedule_step(final_tweets, details["name"], events, f"{details['name']} {cfg['suffix']}")
