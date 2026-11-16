@@ -588,21 +588,17 @@ def render_tweets_step(tweets, cal_prefix):
                 st.image(str(IMAGES_DIR / IMAGES[image][1]), width="stretch")
 
             if t["immediate"]:
-                include = st.checkbox(
-                    "Send to Buffer now (posts about 2 minutes after you press Schedule)",
-                    value=False,
-                    key=f"inc_{sid}_{t['title']}",
+                st.caption(
+                    "If ticked in step 4 this goes to Buffer and posts about 2 minutes after you press Schedule. "
+                    "Or post it yourself — the X button below can't attach the image, so add it by hand."
                 )
-                st.caption("Or post it yourself — the X button below can't attach the image, so add it by hand.")
-            else:
-                include = st.checkbox("Include in Buffer schedule", value=True, key=f"inc_{sid}_{t['title']}")
 
             c1, c2 = st.columns(2)
             c1.link_button("🌐 Post on X now", get_x_intent_url(text), width="stretch")
             dt = parse_to_datetime(t["when"])
             if dt:
                 c2.link_button("📅 Calendar reminder", gcal_url(f"{cal_prefix}: {t['title']}", dt), width="stretch")
-        final.append({**t, "text": text, "include": include, "image": None if image == NO_IMAGE else image})
+        final.append({**t, "text": text, "image": None if image == NO_IMAGE else image})
     return final
 
 
@@ -614,39 +610,42 @@ def render_schedule_step(tweets, match_name, events):
     scheduled = st.session_state.setdefault("scheduled_ids", set())
     now = now_uk()
 
+    sid = st.session_state.scan_id
+
     with st.container(border=True):
-        st.markdown("**⚡ Buffer**")
-        rows, to_send = [], []
+        st.markdown("**⚡ Buffer** — tick the tweets to schedule")
+        to_send = []
         for t in tweets:
             immediate = t["immediate"]
             dt = now + timedelta(minutes=2) if immediate else parse_to_datetime(t["when"])
             length = tweet_length(t["text"])
             tid = f"{match_name}|{t['title']}|" + ("now" if immediate else (dt.isoformat() if dt else ""))
+
+            # Reasons a tweet can't be sent; such rows are shown unticked and greyed out.
             if tid in scheduled:
-                status = "✅ Sent"
-            elif not t["include"]:
-                status = "⏸️ Off"
+                reason = "✅ already in Buffer"
             elif not dt:
-                status = "⏭️ TBA"
+                reason = "time is TBA"
             elif dt <= now:
-                status = "⏭️ Past"
+                reason = "time has passed"
             elif length > char_limit():
-                status = f"⏭️ {length} chars"
+                reason = f"too long ({length} chars)"
             else:
-                status = "🕒 Send"
-                to_send.append((t, dt, tid))
-            rows.append(
-                {
-                    "": status,
-                    "When (UK)": "Now" if immediate else (format_datetime(dt).replace(":00", "") if dt else TBA),
-                    "🖼️": "✓" if t["image"] else "",
-                    "Tweet": t["title"],
-                    "UTC": "—" if immediate or not dt else buffer_due_at(dt)[11:16],
-                }
+                reason = None
+
+            when = "posts now" if immediate else format_datetime(dt).replace(":00", "")
+            label = f"{t['title']} · {when if dt else TBA}{' 🖼️' if t['image'] else ''}"
+            if reason:
+                label += f" — {reason}"
+            include = st.checkbox(
+                label,
+                value=not reason,
+                disabled=bool(reason),
+                key=f"send_{sid}_{t['title']}_{'off' if reason else 'on'}",
             )
-        if rows:
-            st.dataframe(rows, hide_index=True, width="stretch")
-            st.caption("🕒 will send · ✅ already sent · ⏸️ unticked · ⏭️ skipped (TBA, already passed or too long)")
+            if include and not reason:
+                to_send.append((t, dt, tid))
+        st.caption("🖼️ = has an image. Times are UK time (converted to UTC for Buffer automatically).")
 
         buffer_ready = bool(secret("BUFFER_API_KEY") and secret("BUFFER_CHANNEL_ID"))
         if st.button(
