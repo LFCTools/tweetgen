@@ -159,6 +159,29 @@ def day_label(date_str, post_str, fallback=None):
     return date_str if fallback is None else fallback
 
 
+_ACS_SENTENCE_RE = re.compile(
+    r"(?:auto\s*cup|\bACS\b)[^.]{0,120}?\b(?:between|from|on|taken|processed|charged)\b([^.]{0,120})",
+    re.IGNORECASE,
+)
+
+
+def find_acs_dates(text, today=None):
+    """Pull ACS (Auto Cup Scheme) payment dates straight from page text.
+
+    e.g. "Auto Cup payments will be processed between Thursday 26 November - Friday 27 November."
+    Returns (start, end) as "Thu 26 Nov" strings, or (None, None) if no such sentence is found.
+    """
+    for m in _ACS_SENTENCE_RE.finditer(text or ""):
+        dates = []
+        for d in _DATE_RE.finditer(m.group(1)):
+            dt = parse_to_datetime(d.group(0).split(",")[0], today=today)
+            if dt:
+                dates.append(dt)
+        if dates:
+            return format_date(dates[0]), format_date(dates[-1])
+    return None, None
+
+
 def has_time(date_str):
     """True if the string includes a clock time (as opposed to a bare date)."""
     s = str(date_str or "").lower()

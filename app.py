@@ -20,6 +20,8 @@ importlib.reload(_helpers_module)
 importlib.reload(_templates_module)
 
 from helpers import (
+    find_acs_dates,
+    is_set,
     related_page_links,
     TBA,
     buffer_due_at,
@@ -413,6 +415,10 @@ def run_scan(chosen, gemini_key, url=None, page_text=None, force=False, extra_ur
             if force:
                 ask_gemini.clear(prompt, page_text, gemini_key)
             data = ask_gemini(prompt, page_text, gemini_key)
+            if match_type == "cup_home" and not (is_set(data.get("acs_start")) and is_set(data.get("acs_end"))):
+                acs_start, acs_end = find_acs_dates(page_text)  # backup if Gemini missed them
+                if acs_start:
+                    data = {**data, "acs_start": acs_start, "acs_end": acs_end}
         except Exception as e:
             error = describe_error(step, e)
             status.update(label=f"Scan failed while {step}", state="error")

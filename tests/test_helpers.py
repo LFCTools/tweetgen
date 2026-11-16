@@ -148,3 +148,20 @@ def test_shorten_tier_name():
 def test_strip_json_fences():
     assert strip_json_fences('```json\n{"a": 1}\n```') == '{"a": 1}'
     assert strip_json_fences('{"a": 1}') == '{"a": 1}'
+
+
+# --- ACS dates straight from page text ---------------------------------------
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("Auto Cup Scheme Auto Cup payments will be processed between Thursday 26 November - Friday 27 November. Ticket prices",
+         ("Thu 26 Nov", "Fri 27 Nov")),
+        ("ACS members will be charged on Tuesday 1 December.", ("Tue 01 Dec", "Tue 01 Dec")),
+        ("Auto Cup Scheme payments will be taken between Mon 30 Nov and Wed 2 Dec.", ("Mon 30 Nov", "Wed 02 Dec")),
+        ("Need to update your payment card? Credit or Debit Card - ACS payment option should be selected.", (None, None)),
+        ("No scheme here.", (None, None)),
+    ],
+)
+def test_find_acs_dates(text, expected):
+    from helpers import find_acs_dates
+    assert find_acs_dates(text, today=TODAY) == expected

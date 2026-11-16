@@ -77,7 +77,7 @@ Source Text: <<PAGE_TEXT>>
 CUP_PROMPT = """
 Analyze the following raw text from an LFC Cup or European Home match ticket page. Exclude any wheelchair, ambulant, or disabled sales tiers.
 Extract opponent name, competition type (determine whether it is 'League Cup', 'FA Cup', or 'Champions League' / 'European Home' based on the text), sales tiers with open/close times, local ballot dates, and ACS dates.
-ACS means the Auto Cup Scheme. Its dates may be phrased as "Auto Cup Scheme payments will be taken between ...", "ACS payment run", "ACS members will be charged on ..." or similar, and are often on the additional ticket-info page. Use the first payment date for acs_start and the last for acs_end (the same date for both if only one is given).
+ACS means the Auto Cup Scheme. Its dates may be phrased as "Auto Cup payments will be processed between Thursday 26 November - Friday 27 November", "Auto Cup Scheme payments will be taken between ...", "ACS payment run", "ACS members will be charged on ..." or similar, and are often on the additional ticket-info page. Use the first payment date for acs_start and the last for acs_end (the same date for both if only one is given).
 """ + COMMON_RULES + """
 Desired JSON Format:
 {
