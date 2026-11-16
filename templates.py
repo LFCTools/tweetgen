@@ -36,6 +36,9 @@ COMMON_RULES = """
 Respond ONLY with a valid JSON object matching the structure below.
 Use abbreviated days (e.g., Wed) and months (e.g., Nov) and format times like 10:00am or 11:00am.
 If any field is missing, make its value "TBA". Never invent dates that are not in the source text.
+Never include Priority Rights Holders (PRH) sales — leave those tiers out entirely.
+The source text may contain more than one page for the same match (the main match page plus an
+additional ticket-info page with ACS dates, allocation and prices); combine the information from all of them.
 """
 
 CLASSIFY_PROMPT = """
@@ -94,7 +97,7 @@ Source Text: <<PAGE_TEXT>>
 
 AWAY_PROMPT = """
 Analyze the following raw text from an LFC Away match ticket page. Exclude any wheelchair, ambulant, or disabled sales tiers.
-Extract opponent name, sales tiers with open/close times, and forwarding deadline if present.
+Extract opponent name, sales tiers with open/close times, forwarding deadline if present, Liverpool's ticket allocation and ticket prices.
 """ + COMMON_RULES + """
 Desired JSON Format:
 {
@@ -103,6 +106,8 @@ Desired JSON Format:
     {"tier": "9+ Away Credit Balance", "open": "Day Date, Time", "close": "Day Date, Time"}
   ],
   "forwarding_deadline": "Day Date, Time",
+  "allocation": "Number of tickets in Liverpool's allocation, e.g. 2,962 tickets (TBA if not stated)",
+  "prices": ["One entry per price band, e.g. Adults £30", "Over 65s £22", "Under 18s £15"],
   "match_date": "Day Date, Time"
 }
 Source Text: <<PAGE_TEXT>>
@@ -110,7 +115,7 @@ Source Text: <<PAGE_TEXT>>
 
 CL_PROMPT = """
 Analyze the following raw text from an LFC Champions League / European Away match ticket page. Exclude any wheelchair, ambulant, or disabled sales tiers.
-Extract opponent name, match date, and sales tiers.
+Extract opponent name, match date, sales tiers, Liverpool's ticket allocation and ticket prices.
 CRITICAL INSTRUCTIONS:
 1. For 'tier', simplify the criteria name to something clean like '9+ Games' or '9+ Away Credit Balance' (e.g., if it says 'with a European Away Match Credit Balance of 9 or more', make tier '9+ Games').
 2. Look inside EACH sale section for the sentence mentioning 'Forwarding Deadline' and extract its exact date and time into 'forwarding_deadline' for that tier.
@@ -128,6 +133,8 @@ Desired JSON Format:
       "forwarding_deadline": "Thu 24 Sep, 11:00am"
     }
   ],
+  "allocation": "Number of tickets in Liverpool's allocation, e.g. 2,962 tickets (TBA if not stated)",
+  "prices": ["One entry per price band, e.g. Adults €45"],
   "match_date": "Wed 14 Oct, 5:45pm"
 }
 Source Text: <<PAGE_TEXT>>
@@ -171,6 +178,19 @@ def sale_close_reminder(match_prefix, tier, close, open_=None):
         return None
     text = f"""{match_prefix} ⏰\n\nSale Closing Reminder ({tier})\n• Closes: {today_label(close)}"""
     return tweet(f"⏰ Sale Closing ({tier})", get_offset_time(close, hours_before=1), text, image="sale_reminder")
+
+
+def allocation_block(d):
+    """Allocation and prices section for away announcements ("" if neither is known)."""
+    sections = []
+    allocation = str(d.get("allocation") or "").strip()
+    if allocation and allocation.upper() != TBA:
+        sections.append(f"Allocation 🎫\n• {allocation}")
+    prices = [p.strip(" •-\t") for p in str(d.get("prices") or "").splitlines()]
+    prices = [p for p in prices if p and p.upper() != TBA]
+    if prices:
+        sections.append("Prices 💷\n" + "\n".join(f"• {p}" for p in prices))
+    return "".join(f"\n\n{section}" for section in sections)
 
 
 def sale_events(match_prefix, sales):
@@ -249,13 +269,19 @@ def cup_tweets(d):
         tweet(
             "🗳️ Local Ballot Opening",
             b_open,
-            f"""{name} (H) - Local Ballot 📢\n\nLocal Ballot 🗳️\n• Opens: Now\n• Closes: {b_close}\n\n{BALLOTS_URL}""",
+            f"""{name} (H) - Local Ballot 📢\n\nLocal Ballot 🗳️\n• Opens: Now\n• Closes: {b_close}\n\n• Results: {b_res}\n\n{BALLOTS_URL}""",
             image="local_ballot",
         ),
         tweet(
             "⏰ Local Ballot Closing",
             get_offset_time(b_close, 1),
-            f"""{name} (H) - Local Ballot 📢\n\nLocal Ballot 🗳️\n• Opens: Now\n• Closes: {today_label(b_close)}\n\n{BALLOTS_URL}""",
+            f"""{name} (H) - Local Ballot 📢\n\nLocal Ballot 🗳️\n• Opens: Now\n• Closes: {today_label(b_close)}\n\n• Results: {b_res}\n\n{BALLOTS_URL}""",
+            image="local_ballot",
+        ),
+        tweet(
+            "✨ Local Ballot Results",
+            get_results_day_morning(b_res),
+            f"""{name} (H) - Local Ballot 📢\n\nLocal Ballot Results 🗳️\n• Results today\n• Ensure you have funds in your bank\n\nComment below if successful 👇""",
             image="local_ballot",
         ),
     ]
@@ -288,7 +314,7 @@ def cup_events(d):
 def away_tweets(d):
     name, sales, fwd, m_date = d["name"], d["sales"], d["forwarding_deadline"], d["match_date"]
     blocks = "\n\n".join(f"Sale ({s['tier']})\n• Opens: {s['open']}\n• Closes: {s['close']}" for s in sales)
-    announcement = f"""{name} (A) - Sale Details 📢\n\n{blocks}\n\nMatch Date • {m_date} 🏟️"""
+    announcement = f"""{name} (A) - Sale Details 📢\n\n{blocks}{allocation_block(d)}\n\nMatch Date • {m_date} 🏟️"""
 
     tweets = [tweet("📢 Sales Detail Announcement", IMMEDIATE, announcement, image="sales_details", immediate=True)]
     for s in sales:
@@ -329,7 +355,7 @@ def cl_tweets(d):
             info_tag = ""
         blocks.append(f"Sale ({s['tier']}{info_tag})\n• Opens: {s['open']}\n• Closes: {s['close']}")
     blocks_text = "\n\n".join(blocks)
-    announcement = f"""{name} (A) - Sale Details 📢\n\n{blocks_text}\n\nMatch Date • {m_date} 🏟️"""
+    announcement = f"""{name} (A) - Sale Details 📢\n\n{blocks_text}{allocation_block(d)}\n\nMatch Date • {m_date} 🏟️"""
 
     tweets = [tweet("📢 CL Away Sales Details Announcement", IMMEDIATE, announcement, image="sales_details", immediate=True)]
     for s in sales:
@@ -416,6 +442,7 @@ MATCH_TYPES = {
             ("match_date", "Kick-off", False),
         ],
         "sale_extras": [],
+        "text_fields": [("allocation", "Allocation"), ("prices", "Prices (one per line)")],
         "tweets": footered(away_tweets),
         "events": away_events,
     },
@@ -425,6 +452,7 @@ MATCH_TYPES = {
         "prompt": CL_PROMPT,
         "dates": [("match_date", "Kick-off", False)],
         "sale_extras": ["info", "forwarding_deadline"],
+        "text_fields": [("allocation", "Allocation"), ("prices", "Prices (one per line)")],
         "tweets": footered(cl_tweets),
         "events": cl_events,
     },

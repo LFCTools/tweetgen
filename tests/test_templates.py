@@ -31,6 +31,9 @@ def details_from(match_type, raw):
             d["sales"].append({**s, "tier": tier, "info": s.get("info", ""),
                                "forwarding_deadline": s.get("forwarding_deadline", "TBA")})
     d["hallmap_url"] = get_hallmap_link(d["name"], d.get("match_date"))
+    prices = raw.get("prices", "")
+    d["allocation"] = raw.get("allocation", "")
+    d["prices"] = "\n".join(prices) if isinstance(prices, list) else prices
     return d
 
 
@@ -196,3 +199,45 @@ def test_euro_away_forwarding_deadline_is_in_sale_tweet_only():
     assert "• Forwarding deadline: Wed 18 Nov - 11:00am" in sales[1]
     # Still in the calendar.
     assert any(e["label"].startswith("Forwarding Deadline") for e in MATCH_TYPES["euro_away"]["events"](d))
+
+
+# --- cup ballot results, PRH, allocation & prices, companion pages ----------
+def test_cup_ballot_results_tweet_and_lines():
+    raw = dict(FAKES["cup"], ballot_results="Thu 26 Nov")
+    tweets = {t["title"]: t for t in MATCH_TYPES["cup_home"]["tweets"](details_from("cup_home", raw))}
+    res = tweets["✨ Local Ballot Results"]
+    assert res["when"] == "Thu 26 Nov, 8:30am" and res["image"] == "local_ballot"
+    assert "Local Ballot Results 🗳️\n• Results today" in res["text"]
+    for title in ("🗳️ Local Ballot Opening", "⏰ Local Ballot Closing"):
+        assert "• Results: Thu 26 Nov" in tweets[title]["text"]
+
+
+def test_priority_rights_holders_never_tweeted():
+    for match_type, tab in OLD_TAB.items():
+        raw = dict(FAKES[tab])
+        raw["sales"] = raw["sales"] + [{"tier": "Priority Rights Holders", "open": "Mon 23 Nov, 9:00am", "close": "TBA"},
+                                       {"tier": "PRH Sale", "open": "Mon 23 Nov, 9:00am", "close": "TBA"}]
+        for t in MATCH_TYPES[match_type]["tweets"](details_from(match_type, raw)):
+            assert "priority" not in t["text"].lower() and "PRH" not in t["text"]
+
+
+def test_allocation_block_skips_unknowns():
+    from templates import allocation_block
+    assert allocation_block({"allocation": "TBA", "prices": ""}) == ""
+    assert allocation_block({"allocation": "", "prices": "• Adults £30\n\nTBA\n"}) == "\n\nPrices 💷\n• Adults £30"
+
+
+def test_related_page_links():
+    from helpers import related_page_links
+    match = "https://www.liverpoolfc.com/tickets/match/liverpool-v-bournemouth-english-league-cup-20261216"
+    info = "https://www.liverpoolfc.com/tickets/ticket-info/2026-27/league-cup-home/bournemouth-home-carabao-cup-2627"
+    hrefs = [
+        "/tickets/ticket-info/2026-27/league-cup-home/bournemouth-home-carabao-cup-2627",
+        "/tickets/ticket-info/2026-27/general-ticketing-info",
+        "/tickets/ticket-info/2026-27/league-cup-home/chelsea-home-carabao-cup-2627",
+        "https://example.com/tickets/ticket-info/bournemouth",
+        "#top",
+    ]
+    assert related_page_links(match, hrefs) == [info]
+    assert related_page_links(info, ["/tickets/match/liverpool-v-bournemouth-english-league-cup-20261216"]) == [match]
+    assert related_page_links("https://www.liverpoolfc.com/news/x", hrefs) == []

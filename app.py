@@ -20,6 +20,7 @@ importlib.reload(_helpers_module)
 importlib.reload(_templates_module)
 
 from helpers import (
+    related_page_links,
     TBA,
     buffer_due_at,
     build_ics,
@@ -139,7 +140,8 @@ def get_gemini_client(api_key):
 
 
 @st.cache_data(ttl=600, show_spinner=False)
-def fetch_page_text(url):
+def fetch_page(url):
+    """Download a page; returns its visible text and the links in its main content."""
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     response = requests.get(url, headers=headers, timeout=15)
     response.raise_for_status()
@@ -147,13 +149,41 @@ def fetch_page_text(url):
     soup = BeautifulSoup(response.text, "html.parser")
     for tag in soup(["script", "style", "nav", "footer", "header"]):
         tag.extract()
+    links = [a.get("href") for a in soup.find_all("a") if a.get("href")]
     page_text = " ".join(soup.get_text().split())
     if len(page_text) < MIN_PAGE_TEXT:
         raise ValueError(
             f"The page only contained {len(page_text)} characters of text. "
             "The site may have blocked the request or the URL is wrong — check it in a browser."
         )
-    return page_text[:PAGE_TEXT_LIMIT]
+    return {"text": page_text[:PAGE_TEXT_LIMIT], "links": links}
+
+
+def gather_pages(url, extra_url=None, force=False):
+    """Read the match page plus its companion ticket-info page (found automatically or given).
+
+    Returns (combined text for Gemini, list of URLs read, list of warnings).
+    """
+    if force:
+        fetch_page.clear(url)
+    main = fetch_page(url)
+    others = []
+    if extra_url:
+        others.append(extra_url)
+    for link in related_page_links(url, main["links"]):
+        if link not in others:
+            others.append(link)
+
+    parts, sources, warnings = [f"=== MAIN PAGE: {url} ===\n{main['text']}"], [url], []
+    for other in others[:2]:
+        try:
+            if force:
+                fetch_page.clear(other)
+            parts.append(f"=== ADDITIONAL PAGE (same match): {other} ===\n{fetch_page(other)['text']}")
+            sources.append(other)
+        except Exception as e:  # the main page is enough to carry on
+            warnings.append(f"Couldn't read {other} ({e}) — carried on with the main page.")
+    return "\n\n".join(parts), sources, warnings
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -231,13 +261,14 @@ def build_sales_df(cfg, data):
     return df
 
 
-def load_match(match_type, data, url=None):
+def load_match(match_type, data, url=None, sources=None):
     cfg = MATCH_TYPES[match_type]
     st.session_state.scan_id = st.session_state.get("scan_id", 0) + 1
     st.session_state.match = {
         "type": match_type,
         "data": data,
         "url": url,
+        "sources": sources or [],
         "dates_df": build_dates_df(cfg, data),
         "sales_df": build_sales_df(cfg, data),
     }
@@ -265,6 +296,12 @@ def render_scan_step(gemini_key):
             key="type_choice",
         ) or AUTO
         url = st.text_input("Ticket page URL", placeholder="https://www.liverpoolfc.com/tickets/...", key="url")
+        extra_url = st.text_input(
+            "Extra info page (optional)",
+            placeholder="https://www.liverpoolfc.com/tickets/ticket-info/...",
+            key="extra_url",
+            help="Pages with ACS dates, allocation or prices. If the match page links to one, it's read automatically.",
+        )
         force = st.checkbox("Re-read the page (ignore the 10-minute cache)", key="force")
 
         c1, c2 = st.columns([2, 1])
@@ -297,7 +334,11 @@ def render_scan_step(gemini_key):
         if not url.startswith(("http://", "https://")):
             st.error("The URL must start with http:// or https://")
             return
-        run_scan(chosen, gemini_key, url=url, force=force)
+        extra_url = (extra_url or "").strip()
+        if extra_url and not extra_url.startswith(("http://", "https://")):
+            st.error("The extra info page URL must start with http:// or https://")
+            return
+        run_scan(chosen, gemini_key, url=url, extra_url=extra_url or None, force=force)
 
     if scan_pasted:
         text = " ".join((pasted or "").split())
@@ -332,16 +373,15 @@ def describe_error(step, e):
     return f"{type(e).__name__}: {msg}"
 
 
-def run_scan(chosen, gemini_key, url=None, page_text=None, force=False):
+def run_scan(chosen, gemini_key, url=None, page_text=None, force=False, extra_url=None):
     step = "downloading the page"
     error = None
+    sources, warnings = [], []
     with st.status("Scanning ticket page…", expanded=False) as status:
         try:
             if page_text is None:
-                if force:
-                    fetch_page_text.clear(url)
                 status.update(label="Downloading page…")
-                page_text = fetch_page_text(url)
+                page_text, sources, warnings = gather_pages(url, extra_url, force)
 
             match_type = chosen
             if match_type == AUTO:
@@ -363,8 +403,10 @@ def run_scan(chosen, gemini_key, url=None, page_text=None, force=False):
             error = describe_error(step, e)
             status.update(label=f"Scan failed while {step}", state="error")
         else:
-            load_match(match_type, data, url)
+            load_match(match_type, data, url, sources)
             status.update(label=f"Scanned — {MATCH_TYPES[match_type]['label']}", state="complete")
+    for w in warnings:
+        st.warning(w)
     if error:
         st.error(error)
 
@@ -380,10 +422,21 @@ def render_details_step(match):
     st.markdown("#### 2 · Check the details")
     detected = "Detected" if match["url"] else "Type"
     st.caption(f"{detected}: **{cfg['label']}**. Wrong type? Pick the right one above and scan again.")
+    if len(match.get("sources", [])) > 1:
+        st.caption("Read " + " + ".join(f"[page {i + 1}]({u})" for i, u in enumerate(match["sources"])))
 
     details = {}
     with st.container(border=True):
         details["name"] = st.text_input("Opponent", value=data.get("match_name", "") or "", key=f"name_{sid}")
+        for key, label in cfg.get("text_fields", []):
+            value = data.get(key, "")
+            if isinstance(value, list):
+                value = "\n".join(str(v) for v in value)
+            value = "" if str(value).strip().upper() == TBA else str(value)
+            if "one per line" in label:
+                details[key] = st.text_area(label, value=value, key=f"{key}_{sid}", height=100)
+            else:
+                details[key] = st.text_input(label, value=value, key=f"{key}_{sid}")
         if match["type"] == "cup_home":
             details["competition"] = st.text_input(
                 "Competition", value=data.get("competition", "") or "League Cup", key=f"comp_{sid}"

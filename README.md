@@ -6,7 +6,9 @@ entries.
 
 ## How it works
 
-1. **Scan** – paste a ticket page URL. The match type (PL home, cup/euro home,
+1. **Scan** – paste a ticket page URL. If the match page links to a ticket-info page
+   for the same match (ACS dates, allocation, prices) that is read too; you can also
+   give it in *Extra info page*. The match type (PL home, cup/euro home,
    league away, euro away) is auto-detected, or pick it yourself. *Enter manually*
    gives a blank form if scanning fails.
 2. **Check the details** – all key dates and sale tiers are in two editable tables.
@@ -52,6 +54,8 @@ pytest
 - Images in `images/` are attached to tweets sent to Buffer (mapping in `IMAGES` in
   `templates.py`). To change one, replace the file on GitHub with the same name.
   Buffer fetches them from GitHub, so they must be on the `main` branch.
+- Priority Rights Holders sales are never included in tweets.
+- Away announcements include the allocation and prices when known.
 - Sales that close within 4 hours of opening get no separate closing reminder.
 - Reminders with a TBA time, a time in the past, or text over the X character
   limit are skipped rather than posted immediately. Each reminder is sent once per session.

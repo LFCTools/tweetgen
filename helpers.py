@@ -8,6 +8,7 @@ happens at the edge, when talking to Buffer.
 import hashlib
 import re
 import urllib.parse
+from urllib.parse import urljoin, urlparse
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -325,10 +326,55 @@ def tweet_length(text):
     return total
 
 
+# Words in LFC ticket URLs that don't identify the opponent.
+_SLUG_STOPWORDS = {
+    "liverpool", "tickets", "ticket", "match", "info", "english", "premier", "league", "home", "away",
+    "carabao", "uefa", "champions", "europa", "conference", "community", "shield", "final", "semi",
+    "quarter", "round", "group", "stage", "phase", "friendly", "women", "academy",
+}
+
+
+def _slug_tokens(path):
+    return {t for t in re.split(r"[^a-z0-9]+", path.lower()) if len(t) > 3 and not t.isdigit() and t not in _SLUG_STOPWORDS}
+
+
+def related_page_links(page_url, hrefs, limit=2):
+    """Find the companion page for the same match.
+
+    A match page (/tickets/match/...) often links to a ticket-info page (/tickets/ticket-info/...)
+    with ACS dates, allocation and prices, and vice versa. Only links that share an opponent word
+    with `page_url` (e.g. "bournemouth") are returned, so unrelated pages are ignored.
+    """
+    path = urlparse(page_url).path
+    if "/tickets/match/" in path:
+        want = "/tickets/ticket-info/"
+    elif "/tickets/ticket-info/" in path:
+        want = "/tickets/match/"
+    else:
+        return []
+    tokens = _slug_tokens(path)
+    if not tokens:
+        return []
+
+    found = []
+    for href in hrefs:
+        full = urljoin(page_url, href or "").split("#")[0].split("?")[0]
+        parsed = urlparse(full)
+        if not parsed.netloc.endswith("liverpoolfc.com") or want not in parsed.path:
+            continue
+        if full.rstrip("/") == page_url.split("?")[0].rstrip("/") or full in found:
+            continue
+        if tokens & _slug_tokens(parsed.path):
+            found.append(full)
+    return found[:limit]
+
+
 def shorten_tier_name(tier_str):
     t_lower = tier_str.lower()
     if any(kw in t_lower for kw in ["wheelchair", "ambulant", "disabled"]):
         return None
+    if "priority right" in t_lower or re.search(r"\bprh\b", t_lower):
+        return None  # Priority Rights Holders sales are never tweeted
 
     num_match = re.search(r"(\d+)", tier_str)
     num = num_match.group(1) if num_match else ""
