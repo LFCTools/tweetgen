@@ -162,6 +162,14 @@ def with_footer(text):
     return f"{text.rstrip()}\n\n{FOOTER}"
 
 
+def without_footer(text):
+    """Text for Discord: the same post without the X follow footer and hashtags."""
+    text = text.rstrip()
+    if text.endswith(FOOTER):
+        text = text[: -len(FOOTER)]
+    return text.rstrip()
+
+
 def is_short_sale(open_str, close_str):
     """True if the sale closes within SHORT_SALE of opening."""
     opens, closes = parse_to_datetime(open_str), parse_to_datetime(close_str)

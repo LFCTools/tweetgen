@@ -20,6 +20,7 @@ importlib.reload(_helpers_module)
 importlib.reload(_templates_module)
 
 from helpers import (
+    uk_to_utc,
     find_acs_dates,
     is_set,
     related_page_links,
@@ -41,7 +42,7 @@ from helpers import (
 from datetime import timedelta
 from pathlib import Path
 
-from templates import CLASSIFY_PROMPT, IMAGES, MATCH_TYPES
+from templates import CLASSIFY_PROMPT, IMAGES, MATCH_TYPES, without_footer
 
 GEMINI_MODEL = "gemini-2.5-flash"
 PAGE_TEXT_LIMIT = 40000
@@ -51,6 +52,7 @@ IMAGES_DIR = Path(__file__).parent / "images"
 # Public URL Buffer fetches images from. The repo is public, so GitHub serves the files in images/.
 DEFAULT_IMAGE_BASE_URL = "https://raw.githubusercontent.com/LFCTools/tweetgen/main/images/"
 NO_IMAGE = "none"
+DISCORD_LIMIT = 2000  # Discord message length limit
 PREMIUM_LIMIT = 25000  # X Premium post length; set X_CHAR_LIMIT = 280 in secrets for a standard account
 
 
@@ -291,7 +293,7 @@ def load_match(match_type, data, url=None, sources=None):
 
 
 def start_over():
-    keep = {"scheduled_ids", "scan_id"}
+    keep = {"scheduled_buffer", "scheduled_discord", "scan_id"}
     for k in list(st.session_state.keys()):
         if k not in keep:
             del st.session_state[k]
@@ -605,30 +607,94 @@ def render_tweets_step(tweets, cal_prefix):
 # ==========================================
 # STEP 4 — SCHEDULE & CALENDAR
 # ==========================================
-def render_schedule_step(tweets, match_name, events):
-    st.markdown("#### 4 · Schedule & calendar")
-    scheduled = st.session_state.setdefault("scheduled_ids", set())
-    now = now_uk()
+def schedule_to_discord(text, scheduled_at_local, image=None, immediate=False):
+    """Queue a Discord webhook post via QStash, delivered at `scheduled_at_local` (UK time)."""
+    token, webhook = secret("QSTASH_TOKEN"), secret("DISCORD_WEBHOOK_URL")
+    if not token:
+        return False, "QSTASH_TOKEN is missing from Streamlit secrets."
+    if not webhook:
+        return False, "DISCORD_WEBHOOK_URL is missing from Streamlit secrets."
+    base = (secret("QSTASH_URL") or "https://qstash.upstash.io").rstrip("/")
 
+    payload = {"content": text, "allowed_mentions": {"parse": []}}
+    if image:
+        payload["embeds"] = [{"image": {"url": image}}]
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    if not immediate:
+        headers["Upstash-Not-Before"] = str(int(uk_to_utc(scheduled_at_local).timestamp()))
+    try:
+        response = requests.post(f"{base}/v2/publish/{webhook}", headers=headers, json=payload, timeout=10)
+        if response.status_code >= 400:
+            try:
+                detail = response.json().get("error") or response.text
+            except ValueError:
+                detail = response.text
+            return False, f"QStash error (HTTP {response.status_code}): {detail[:300]}"
+        return True, "Scheduled successfully"
+    except Exception as e:
+        return False, str(e)
+
+
+def _buffer_send(text, dt, image, immediate):
+    return schedule_to_buffer(text, dt, image=image)
+
+
+CHANNELS = {
+    "buffer": {
+        "name": "Buffer",
+        "title": "⚡ Buffer (X)",
+        "icon": "🚀",
+        "text": lambda text: text,
+        "length": tweet_length,
+        "limit": lambda: char_limit(),
+        "ready": lambda: bool(secret("BUFFER_API_KEY") and secret("BUFFER_CHANNEL_ID")),
+        "send": _buffer_send,
+        "caption": "🖼️ = has an image. Times are UK time (converted to UTC for Buffer automatically).",
+        "setup": "Add BUFFER_API_KEY and BUFFER_CHANNEL_ID to your secrets to enable scheduling.",
+        "note": "Each post is only sent once per session. If you change a time after scheduling, delete the old post in Buffer.",
+    },
+    "discord": {
+        "name": "Discord",
+        "title": "💬 Discord",
+        "icon": "💬",
+        "text": without_footer,
+        "length": len,
+        "limit": lambda: DISCORD_LIMIT,
+        "ready": lambda: bool(secret("QSTASH_TOKEN") and secret("DISCORD_WEBHOOK_URL")),
+        "send": schedule_to_discord,
+        "caption": "Same posts without the X footer and hashtags. Delivered at the UK times shown via QStash.",
+        "setup": "Add QSTASH_TOKEN, QSTASH_URL and DISCORD_WEBHOOK_URL to your secrets to enable Discord.",
+        "note": "Each post is only sent once per session. To cancel a scheduled Discord post, delete it under Messages in the QStash console.",
+    },
+}
+
+
+def render_channel(channel, tweets, match_name):
+    """Tick list + send button for one destination (Buffer or Discord)."""
+    cfg = CHANNELS[channel]
+    scheduled = st.session_state.setdefault(f"scheduled_{channel}", set())
+    now = now_uk()
     sid = st.session_state.scan_id
+    limit = cfg["limit"]()
 
     with st.container(border=True):
-        st.markdown("**⚡ Buffer** — tick the tweets to schedule")
+        st.markdown(f"**{cfg['title']}** — tick the posts to schedule")
         to_send = []
         for t in tweets:
             immediate = t["immediate"]
             dt = now + timedelta(minutes=2) if immediate else parse_to_datetime(t["when"])
-            length = tweet_length(t["text"])
+            text = cfg["text"](t["text"])
+            length = cfg["length"](text)
             tid = f"{match_name}|{t['title']}|" + ("now" if immediate else (dt.isoformat() if dt else ""))
 
-            # Reasons a tweet can't be sent; such rows are shown unticked and greyed out.
+            # Reasons a post can't be sent; such rows are shown unticked and greyed out.
             if tid in scheduled:
-                reason = "✅ already in Buffer"
+                reason = f"✅ already in {cfg['name']}"
             elif not dt:
                 reason = "time is TBA"
             elif dt <= now:
                 reason = "time has passed"
-            elif length > char_limit():
+            elif length > limit:
                 reason = f"too long ({length} chars)"
             else:
                 reason = None
@@ -641,46 +707,52 @@ def render_schedule_step(tweets, match_name, events):
                 label,
                 value=not reason,
                 disabled=bool(reason),
-                key=f"send_{sid}_{t['title']}_{'off' if reason else 'on'}",
+                key=f"{channel}_send_{sid}_{t['title']}_{'off' if reason else 'on'}",
             )
             if include and not reason:
-                to_send.append((t, dt, tid))
-        st.caption("🖼️ = has an image. Times are UK time (converted to UTC for Buffer automatically).")
+                to_send.append((t, text, dt, tid))
+        st.caption(cfg["caption"])
 
-        buffer_ready = bool(secret("BUFFER_API_KEY") and secret("BUFFER_CHANNEL_ID"))
+        ready = cfg["ready"]()
         if st.button(
-            f"🚀 Schedule {len(to_send)} reminder(s) to Buffer",
+            f"{cfg['icon']} Schedule {len(to_send)} post(s) to {cfg['name']}",
             type="primary",
             width="stretch",
-            key="buffer_go",
-            disabled=not (to_send and buffer_ready),
+            key=f"{channel}_go",
+            disabled=not (to_send and ready),
         ):
             prog = st.progress(0.0)
             ok_count, errors = 0, []
-            for idx, (t, dt, tid) in enumerate(to_send):
+            for idx, (t, text, dt, tid) in enumerate(to_send):
                 if t["immediate"]:
                     dt = now_uk() + timedelta(minutes=2)
-                ok, msg = schedule_to_buffer(t["text"], dt, image=image_url(t["image"]))
+                ok, msg = cfg["send"](text, dt, image_url(t["image"]), t["immediate"])
                 if ok:
                     ok_count += 1
                     scheduled.add(tid)
                 else:
-                    errors.append(f"Failed to queue '{t['title']}': {msg}")
+                    errors.append(f"Failed to schedule '{t['title']}': {msg}")
                 prog.progress((idx + 1) / len(to_send))
-            st.session_state.buffer_result = (ok_count, len(to_send), errors)
+            st.session_state[f"{channel}_result"] = (ok_count, len(to_send), errors)
             st.rerun()
 
-        result = st.session_state.pop("buffer_result", None)
+        result = st.session_state.pop(f"{channel}_result", None)
         if result:
             ok_count, total, errors = result
             for err in errors:
                 st.error(err)
             if ok_count:
-                st.success(f"🎉 Scheduled {ok_count}/{total} reminders to Buffer!")
-        if not buffer_ready:
-            st.caption("Add BUFFER_API_KEY and BUFFER_CHANNEL_ID to your secrets to enable scheduling.")
+                st.success(f"🎉 Scheduled {ok_count}/{total} posts to {cfg['name']}!")
+        if not ready:
+            st.caption(cfg["setup"])
         else:
-            st.caption("Each reminder is only sent once per session. If you change a time after scheduling, delete the old post in Buffer.")
+            st.caption(cfg["note"])
+
+
+def render_schedule_step(tweets, match_name, events):
+    st.markdown("#### 4 · Schedule & calendar")
+    for channel in CHANNELS:
+        render_channel(channel, tweets, match_name)
 
     with st.container(border=True):
         st.markdown("**📅 Calendar**")
@@ -714,13 +786,15 @@ def render_sidebar(gemini_key):
             ("Gemini (scanning)", bool(gemini_key)),
             ("Buffer API key", bool(secret("BUFFER_API_KEY"))),
             ("Buffer channel", bool(secret("BUFFER_CHANNEL_ID"))),
+            ("QStash (Discord)", bool(secret("QSTASH_TOKEN"))),
+            ("Discord webhook", bool(secret("DISCORD_WEBHOOK_URL"))),
         ]
         for label, ok in checks:
             st.markdown(f"{'✅' if ok else '❌'} {label}")
         st.caption(f"UK time now: {format_datetime(now_uk())}")
         st.divider()
-        scheduled = len(st.session_state.get("scheduled_ids", ()))
-        st.markdown(f"**{scheduled}** reminder(s) scheduled this session")
+        for channel, ch in CHANNELS.items():
+            st.markdown(f"**{len(st.session_state.get(f'scheduled_{channel}', ()))}** post(s) sent to {ch['name']} this session")
         if st.button("🔄 Start a new match", width="stretch"):
             start_over()
             st.rerun()

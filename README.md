@@ -29,7 +29,10 @@ GEMINI_API_KEY = "..."
 BUFFER_API_KEY = "..."
 BUFFER_CHANNEL_ID = "..."   # required – the Buffer channel to post to
 # IMAGE_BASE_URL = "..."    # optional – where Buffer fetches images (defaults to this repo's images/ on GitHub)
-# X_CHAR_LIMIT = 280        # optional – defaults to 25000 (X Premium); set 280 for a standard account
+# X_CHAR_LIMIT = 280
+QSTASH_TOKEN = "..."        # optional – Discord scheduling via Upstash QStash
+QSTASH_URL = "..."          # the QStash URL for your region, from the Upstash console
+DISCORD_WEBHOOK_URL = "..." # Discord channel webhook (Channel settings → Integrations → Webhooks)        # optional – defaults to 25000 (X Premium); set 280 for a standard account
 ```
 
 ## Run
@@ -54,6 +57,9 @@ pytest
 - Images in `images/` are attached to tweets sent to Buffer (mapping in `IMAGES` in
   `templates.py`). To change one, replace the file on GitHub with the same name.
   Buffer fetches them from GitHub, so they must be on the `main` branch.
+- Discord: the same posts (without the X footer) are scheduled through QStash, which
+  delivers each one to the Discord webhook at its time. Cancel one under Messages in
+  the QStash console.
 - Priority Rights Holders sales are never included in tweets.
 - Away announcements include the allocation and prices when known.
 - Sales that close within 4 hours of opening get no separate closing reminder.

@@ -241,3 +241,13 @@ def test_related_page_links():
     assert related_page_links(match, hrefs) == [info]
     assert related_page_links(info, ["/tickets/match/liverpool-v-bournemouth-english-league-cup-20261216"]) == [match]
     assert related_page_links("https://www.liverpoolfc.com/news/x", hrefs) == []
+
+
+def test_without_footer_for_discord():
+    from templates import FOOTER, with_footer, without_footer
+    assert without_footer(with_footer("Hello\n• line")) == "Hello\n• line"
+    assert without_footer("Edited by hand, no footer") == "Edited by hand, no footer"
+    for match_type, tab in OLD_TAB.items():
+        for t in MATCH_TYPES[match_type]["tweets"](details_from(match_type, FAKES[tab])):
+            assert "following this account" not in without_footer(t["text"])
+            assert "#lfc" not in without_footer(t["text"])
