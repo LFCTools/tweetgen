@@ -8,7 +8,7 @@ Dates are "Wed 23 Sep, 8:15am", "Wed 23 Sep" (all day) or "TBA".
 
 from datetime import timedelta
 
-from helpers import TBA, format_time, get_offset_time, get_results_day_morning, is_set, parse_to_datetime, today_label
+from helpers import TBA, day_label, format_time, get_offset_time, get_results_day_morning, is_set, parse_to_datetime, today_label
 
 IMMEDIATE = "Immediate / Upon Scanning"
 BALLOTS_URL = "https://ticketing.liverpoolfc.com/tickets/ballots"
@@ -260,8 +260,9 @@ def cup_tweets(d):
         ),
     ]
     for s in sales:
-        open_tweet = f"""{name} ({comp})  🎟️\n\nSale ({s['tier']})\n• Opens: {today_label(s['open'])}\n• Closes: {s['close']}\n\nNo registration needed, pre-queue starts 30 minutes before."""
-        tweets.append(tweet(f"🎟️ Sale Opening ({s['tier']})", get_offset_time(s["open"], 1), open_tweet, image="sale_reminder"))
+        post = get_offset_time(s["open"], 1)
+        open_tweet = f"""{name} ({comp})  🎟️\n\nSale ({s['tier']})\n• Opens: {today_label(s['open'])}\n• Closes: {day_label(s['close'], post)}\n\nNo registration needed, pre-queue starts 30 minutes before."""
+        tweets.append(tweet(f"🎟️ Sale Opening ({s['tier']})", post, open_tweet, image="sale_reminder"))
         close = sale_close_reminder(f"{name} ({comp})", s["tier"], s["close"], s["open"])
         if close:
             tweets.append(close)
@@ -291,7 +292,8 @@ def away_tweets(d):
 
     tweets = [tweet("📢 Sales Detail Announcement", IMMEDIATE, announcement, image="sales_details", immediate=True)]
     for s in sales:
-        sale_tweet = f"""{name} (A) 🎟️\n\nSale ({s['tier']})\n• Opens: {today_label(s['open'])}\n• Closes: {s['close']}\n• Guaranteed Sale"""
+        post = get_offset_time(s["open"], 1)
+        sale_tweet = f"""{name} (A) 🎟️\n\nSale ({s['tier']})\n• Opens: {today_label(s['open'])}\n• Closes: {day_label(s['close'], post)}\n• Guaranteed Sale"""
         tweets.append(tweet(f"🎟️ Sale Opening ({s['tier']})", get_offset_time(s["open"], 1), sale_tweet, image="sale_reminder"))
         close = sale_close_reminder(f"{name} (A)", s["tier"], s["close"], s["open"])
         if close:
@@ -332,16 +334,18 @@ def cl_tweets(d):
     tweets = [tweet("📢 CL Away Sales Details Announcement", IMMEDIATE, announcement, image="sales_details", immediate=True)]
     for s in sales:
         info = s.get("info", "").strip()
+        post = get_offset_time(s["open"], 1)
+        close_label = day_label(s["close"], post, fallback=s["close"].replace(",", " -"))
+        fwd = s.get("forwarding_deadline", TBA)
+        fwd_line = ""
+        if is_set(fwd):
+            fwd_line = f"• Forwarding deadline: {day_label(fwd, post, fallback=fwd.replace(',', ' -'))}\n"
         info_line = f"• {info}\n" if info else ""
-        sale_tweet = f"""{name} (A) 🎟️\n\nSale ({s['tier']})\n• Opens: {today_label(s['open'])}\n• Closes: {s['close'].replace(',', ' -')}\n{info_line}"""
+        sale_tweet = f"""{name} (A) 🎟️\n\nSale ({s['tier']})\n• Opens: {today_label(s['open'])}\n• Closes: {close_label}\n{fwd_line}{info_line}"""
         tweets.append(tweet(f"🎟️ Sale Opening ({s['tier']})", get_offset_time(s["open"], 1), sale_tweet, image="sale_reminder"))
         close = sale_close_reminder(f"{name} (A)", s["tier"], s["close"], s["open"])
         if close:
             tweets.append(close)
-        fwd = s.get("forwarding_deadline", TBA)
-        if is_set(fwd):
-            fwd_tweet = f"""{name} (A) ➡️\n\nForwarding Deadline ({s['tier']})\n• Closes: {today_label(fwd)}"""
-            tweets.append(tweet(f"➡️ Forwarding Deadline ({s['tier']})", get_offset_time(fwd, 1), fwd_tweet))
     return tweets
 
 

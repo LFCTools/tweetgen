@@ -146,6 +146,18 @@ def today_label(date_str, hours_before=1):
     return date_str
 
 
+def day_label(date_str, post_str, fallback=None):
+    """Label a date relative to the day a tweet is posted.
+
+    Returns "Today, 10:00am" when `date_str` falls on the same calendar day as `post_str`
+    (the tweet's posting time); otherwise `fallback` (default: `date_str` unchanged).
+    """
+    dt, post = parse_to_datetime(date_str), parse_to_datetime(post_str)
+    if dt and post and dt.date() == post.date():
+        return f"Today, {format_time(dt)}" if has_time(date_str) else "Today"
+    return date_str if fallback is None else fallback
+
+
 def has_time(date_str):
     """True if the string includes a clock time (as opposed to a bare date)."""
     s = str(date_str or "").lower()

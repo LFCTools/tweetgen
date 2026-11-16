@@ -150,3 +150,49 @@ def test_image_files_exist():
     for _, filename in IMAGES.values():
         f = images_dir / filename
         assert f.exists() and f.stat().st_size < 5_000_000, filename
+
+
+# --- "Today" for anything on the same day the tweet is posted --------------
+def test_day_label():
+    from helpers import day_label
+    post = "Mon 16 Nov, 7:15am"
+    assert day_label("Mon 16 Nov, 10:00am", post) == "Today, 10:00am"
+    assert day_label("Mon 16 Nov", post) == "Today"
+    assert day_label("Tue 17 Nov, 10:00am", post) == "Tue 17 Nov, 10:00am"
+    assert day_label("Tue 17 Nov, 10:00am", post, fallback="X") == "X"
+    assert day_label("TBA", post) == "TBA"
+
+
+@pytest.mark.parametrize("match_type", ["cup_home", "league_away", "euro_away"])
+def test_same_day_sale_says_today_for_open_and_close(match_type):
+    raw = dict(FAKES[OLD_TAB[match_type]])
+    raw["sales"] = [{"tier": "All Members", "open": "Mon 16 Nov, 8:15am", "close": "Mon 16 Nov, 10:00am",
+                     "info": "Subject to availability", "forwarding_deadline": "TBA"}]
+    tweets = MATCH_TYPES[match_type]["tweets"](details_from(match_type, raw))
+    sale = next(t for t in tweets if t["title"].startswith("🎟️ Sale Opening"))
+    assert "• Opens: Today, 8:15am" in sale["text"]
+    assert "• Closes: Today, 10:00am" in sale["text"]
+
+
+def test_euro_away_close_on_another_day_keeps_date():
+    raw = dict(FAKES["cl"])
+    raw["sales"] = [{"tier": "9+ Games", "open": "Mon 16 Nov, 8:15am", "close": "Tue 17 Nov, 10:00am",
+                     "info": "", "forwarding_deadline": "TBA"}]
+    sale = MATCH_TYPES["euro_away"]["tweets"](details_from("euro_away", raw))[1]
+    assert "• Closes: Tue 17 Nov - 10:00am" in sale["text"]
+
+
+def test_euro_away_forwarding_deadline_is_in_sale_tweet_only():
+    raw = dict(FAKES["cl"])
+    raw["sales"] = [{"tier": "9+ Games", "open": "Mon 16 Nov, 8:15am", "close": "Mon 16 Nov, 10:00am",
+                     "info": "Guaranteed Sale", "forwarding_deadline": "Mon 16 Nov, 11:00am"},
+                    {"tier": "5+ Games", "open": "Tue 17 Nov, 8:15am", "close": "Tue 17 Nov, 4:00pm",
+                     "info": "", "forwarding_deadline": "Wed 18 Nov, 11:00am"}]
+    d = details_from("euro_away", raw)
+    tweets = MATCH_TYPES["euro_away"]["tweets"](d)
+    assert not any("Forwarding" in t["title"] for t in tweets)
+    sales = [t["text"] for t in tweets if t["title"].startswith("🎟️ Sale Opening")]
+    assert "• Closes: Today, 10:00am\n• Forwarding deadline: Today, 11:00am\n• Guaranteed Sale" in sales[0]
+    assert "• Forwarding deadline: Wed 18 Nov - 11:00am" in sales[1]
+    # Still in the calendar.
+    assert any(e["label"].startswith("Forwarding Deadline") for e in MATCH_TYPES["euro_away"]["events"](d))

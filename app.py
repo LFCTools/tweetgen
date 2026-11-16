@@ -9,6 +9,16 @@ from bs4 import BeautifulSoup
 from google import genai
 from google.genai import types
 
+import importlib
+
+import helpers as _helpers_module
+import templates as _templates_module
+
+# Streamlit Cloud can keep an old copy of these modules loaded after a deploy, which
+# breaks imports of anything new (ImportError). Reloading them on every run is cheap.
+importlib.reload(_helpers_module)
+importlib.reload(_templates_module)
+
 from helpers import (
     TBA,
     buffer_due_at,
