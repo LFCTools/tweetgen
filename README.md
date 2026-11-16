@@ -26,6 +26,7 @@ Code layout: `app.py` (UI), `templates.py` (match types, prompts, tweet wording)
 GEMINI_API_KEY = "..."
 BUFFER_API_KEY = "..."
 BUFFER_CHANNEL_ID = "..."   # required – the Buffer channel to post to
+# X_CHAR_LIMIT = 280        # optional – defaults to 25000 (X Premium); set 280 for a standard account
 ```
 
 ## Run
@@ -46,8 +47,10 @@ pytest
 
 - All times are treated as UK time (Europe/London) and converted to UTC only when
   sent to Buffer, so reminders are correct during both GMT and BST.
-- Reminders with a TBA time, a time in the past, or text over 280 characters are
-  skipped rather than posted immediately. Each reminder is sent once per session.
+- Every tweet ends with the follow line + hashtags (`FOOTER` in `templates.py`).
+- Sales that close within 4 hours of opening get no separate closing reminder.
+- Reminders with a TBA time, a time in the past, or text over the X character
+  limit are skipped rather than posted immediately. Each reminder is sent once per session.
 - Hallmap links are generated from the opponent and kick-off time. Add an entry to
   `HALLMAP_ALIASES` in `helpers.py` if the site spells a club differently, or paste
   the correct link into the override box in the app.

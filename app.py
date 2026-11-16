@@ -11,7 +11,6 @@ from google.genai import types
 
 from helpers import (
     TBA,
-    TWEET_LIMIT,
     buffer_due_at,
     build_ics,
     format_datetime,
@@ -32,6 +31,7 @@ GEMINI_MODEL = "gemini-2.5-flash"
 PAGE_TEXT_LIMIT = 40000
 MIN_PAGE_TEXT = 300
 AUTO = "auto"
+PREMIUM_LIMIT = 25000  # X Premium post length; set X_CHAR_LIMIT = 280 in secrets for a standard account
 
 
 # ==========================================
@@ -47,6 +47,13 @@ def secret(name):
 # ==========================================
 # EXTERNAL SERVICES
 # ==========================================
+def char_limit():
+    try:
+        return int(secret("X_CHAR_LIMIT") or PREMIUM_LIMIT)
+    except (TypeError, ValueError):
+        return PREMIUM_LIMIT
+
+
 def schedule_to_buffer(text, scheduled_at_local):
     """Queue a post in Buffer. `scheduled_at_local` is a naive UK-time datetime."""
     api_key, channel_id = secret("BUFFER_API_KEY"), secret("BUFFER_CHANNEL_ID")
@@ -438,7 +445,7 @@ def render_tweets_step(tweets, cal_prefix):
     final = []
     for i, t in enumerate(tweets):
         generated_length = tweet_length(t["text"])
-        flag = " ⚠️" if generated_length > TWEET_LIMIT else ""
+        flag = " ⚠️" if generated_length > char_limit() else ""
         with st.expander(f"{t['title']} · {t['when']}{flag}", expanded=(i == 0)):
             text = st.text_area(
                 "Tweet text",
@@ -448,10 +455,13 @@ def render_tweets_step(tweets, cal_prefix):
                 label_visibility="collapsed",
             )
             length = tweet_length(text)
-            if length > TWEET_LIMIT:
-                st.warning(f"About {length}/{TWEET_LIMIT} characters — too long for a standard X account (fine with X Premium).")
+            limit = char_limit()
+            if length > limit:
+                st.warning(f"About {length}/{limit} characters — over your X post limit. Trim it before posting.")
+            elif limit > 280:
+                st.caption(f"≈ {length} characters")
             else:
-                st.caption(f"≈ {length}/{TWEET_LIMIT} characters (links count as 23, emoji and • as 2)")
+                st.caption(f"≈ {length}/{limit} characters (links count as 23, emoji and • as 2)")
 
             include = True
             if t["buffer"]:
@@ -493,7 +503,7 @@ def render_schedule_step(tweets, match_name, events):
                 status = "⏭️ TBA"
             elif dt <= now:
                 status = "⏭️ Past"
-            elif length > TWEET_LIMIT:
+            elif length > char_limit():
                 status = f"⏭️ {length} chars"
             else:
                 status = "🕒 Send"

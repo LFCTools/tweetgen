@@ -71,3 +71,42 @@ def test_ics():
     assert "DTSTART;VALUE=DATE:20261201" in ics and "DTEND;VALUE=DATE:20261202" in ics
     assert "DTSTART:20260923T071500Z" in ics  # BST -> UTC
     assert all(len(line.encode()) <= 75 for line in ics.split("\r\n"))
+
+
+# --- short sales: no closing reminder if the sale closes within 4 hours -----
+@pytest.mark.parametrize(
+    "open_, close, expect_reminder",
+    [
+        ("Fri 20 Nov, 10:00am", "Fri 20 Nov, 1:00pm", False),  # 3h
+        ("Fri 20 Nov, 10:00am", "Fri 20 Nov, 2:00pm", False),  # exactly 4h
+        ("Fri 20 Nov, 10:00am", "Fri 20 Nov, 2:01pm", True),   # just over 4h
+        ("Fri 20 Nov, 10:00am", "Sat 21 Nov, 10:00am", True),  # next day
+        ("Fri 20 Nov, 10:00am", "TBA", False),                 # no close time at all
+        ("TBA", "Fri 20 Nov, 1:00pm", True),                   # unknown open -> keep reminder
+    ],
+)
+@pytest.mark.parametrize("match_type", list(MATCH_TYPES))
+def test_short_sale_has_no_closing_reminder(match_type, open_, close, expect_reminder):
+    raw = dict(FAKES[OLD_TAB[match_type]])
+    raw["sales"] = [{"tier": "All Members", "open": open_, "close": close, "info": "", "forwarding_deadline": "TBA"}]
+    d = details_from(match_type, raw)
+    titles = [t["title"] for t in MATCH_TYPES[match_type]["tweets"](d)]
+    assert ("⏰ Sale Closing (All Members)" in titles) == expect_reminder
+    # The calendar still gets the closing time whenever it is known.
+    labels = [e["label"] for e in MATCH_TYPES[match_type]["events"](d)]
+    assert ("Sale Close (All Members)" in labels) == (close != "TBA")
+
+
+def test_footer_on_every_tweet():
+    from templates import FOOTER
+    for match_type, tab in OLD_TAB.items():
+        for t in MATCH_TYPES[match_type]["tweets"](details_from(match_type, FAKES[tab])):
+            assert t["text"].endswith("\n\n" + FOOTER)
+            assert "\n\n\n" not in t["text"]
+
+
+def test_links_time_only():
+    from templates import links_from_time
+    assert links_from_time("Fri 20 Nov, 11:00am") == "10:30am"
+    assert links_from_time("Fri 20 Nov, 12:15pm") == "11:45am"
+    assert links_from_time("TBA") == "TBA"

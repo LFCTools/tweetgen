@@ -6,10 +6,18 @@ Every builder takes a `details` dict of display strings, e.g.
 Dates are "Wed 23 Sep, 8:15am", "Wed 23 Sep" (all day) or "TBA".
 """
 
-from helpers import TBA, get_offset_time, get_results_day_morning, is_set, today_label
+from datetime import timedelta
+
+from helpers import TBA, format_time, get_offset_time, get_results_day_morning, is_set, parse_to_datetime, today_label
 
 IMMEDIATE = "Immediate / Upon Scanning"
 BALLOTS_URL = "https://ticketing.liverpoolfc.com/tickets/ballots"
+
+# Added to the bottom of every tweet.
+FOOTER = "Make sure you're following this account for all ticket reminders & updates 🔔\n\n#lfc #liverpoolfc #lfctickets #anfield"
+
+# A sale that closes within this long of opening gets no separate closing reminder.
+SHORT_SALE = timedelta(hours=4)
 
 
 # --------------------------------------------------------------------------
@@ -129,8 +137,24 @@ def event(label, name, time, all_day=False):
     return {"label": label, "name": name, "time": time, "all_day": all_day}
 
 
-def sale_close_reminder(match_prefix, tier, close):
-    if not is_set(close):
+def with_footer(text):
+    return f"{text.rstrip()}\n\n{FOOTER}"
+
+
+def is_short_sale(open_str, close_str):
+    """True if the sale closes within SHORT_SALE of opening."""
+    opens, closes = parse_to_datetime(open_str), parse_to_datetime(close_str)
+    return bool(opens and closes) and timedelta(0) <= closes - opens <= SHORT_SALE
+
+
+def links_from_time(open_str):
+    """Time unique links go out (30 minutes before the sale), e.g. "10:30am"."""
+    opens = parse_to_datetime(open_str)
+    return format_time(opens - timedelta(minutes=30)) if opens else TBA
+
+
+def sale_close_reminder(match_prefix, tier, close, open_=None):
+    if not is_set(close) or is_short_sale(open_, close):
         return None
     text = f"""{match_prefix} ⏰\n\nSale Closing Reminder ({tier})\n• Closes: {today_label(close)}"""
     return tweet(f"⏰ Sale Closing ({tier})", get_offset_time(close, hours_before=1), text)
@@ -173,10 +197,10 @@ def pl_tweets(d):
         tweet("✨ Local & YA Ballot Results", get_results_day_morning(b_res), ballots_res_tweet),
     ]
     for s in sales:
-        link_time = get_offset_time(s["open"], hours_before=0.5)
+        link_time = links_from_time(s["open"])
         rem_tweet = f"""{name} (H) - {s['tier']} 📢\n\n{s['tier']} 🎟️\n• Opens: {today_label(s['open'])}\n• Click unique links from {link_time}\n\nHallmap link  👇\n{hallmap_url}"""
         tweets.append(tweet(f"🎟️ Sale Opening ({s['tier']})", get_offset_time(s["open"], 1), rem_tweet))
-        close = sale_close_reminder(f"{name} (H)", s["tier"], s["close"])
+        close = sale_close_reminder(f"{name} (H)", s["tier"], s["close"], s["open"])
         if close:
             tweets.append(close)
     return tweets
@@ -223,7 +247,7 @@ def cup_tweets(d):
     for s in sales:
         open_tweet = f"""{name} ({comp})  🎟️\n\nSale ({s['tier']})\n• Opens: {today_label(s['open'])}\n• Closes: {s['close']}\n\nNo registration needed, pre-queue starts 30 minutes before."""
         tweets.append(tweet(f"🎟️ Sale Opening ({s['tier']})", get_offset_time(s["open"], 1), open_tweet))
-        close = sale_close_reminder(f"{name} ({comp})", s["tier"], s["close"])
+        close = sale_close_reminder(f"{name} ({comp})", s["tier"], s["close"], s["open"])
         if close:
             tweets.append(close)
     return tweets
@@ -254,7 +278,7 @@ def away_tweets(d):
     for s in sales:
         sale_tweet = f"""{name} (A) 🎟️\n\nSale ({s['tier']})\n• Opens: {today_label(s['open'])}\n• Closes: {s['close']}\n• Guaranteed Sale"""
         tweets.append(tweet(f"🎟️ Sale Opening ({s['tier']})", get_offset_time(s["open"], 1), sale_tweet))
-        close = sale_close_reminder(f"{name} (A)", s["tier"], s["close"])
+        close = sale_close_reminder(f"{name} (A)", s["tier"], s["close"], s["open"])
         if close:
             tweets.append(close)
     if is_set(fwd):
@@ -296,7 +320,7 @@ def cl_tweets(d):
         info_line = f"• {info}\n" if info else ""
         sale_tweet = f"""{name} (A) 🎟️\n\nSale ({s['tier']})\n• Opens: {today_label(s['open'])}\n• Closes: {s['close'].replace(',', ' -')}\n{info_line}"""
         tweets.append(tweet(f"🎟️ Sale Opening ({s['tier']})", get_offset_time(s["open"], 1), sale_tweet))
-        close = sale_close_reminder(f"{name} (A)", s["tier"], s["close"])
+        close = sale_close_reminder(f"{name} (A)", s["tier"], s["close"], s["open"])
         if close:
             tweets.append(close)
         fwd = s.get("forwarding_deadline", TBA)
@@ -318,6 +342,14 @@ def cl_events(d):
     return events
 
 
+def footered(builder):
+    def build(d):
+        return [{**t, "text": with_footer(t["text"])} for t in builder(d)]
+
+    build.__name__ = builder.__name__
+    return build
+
+
 # --------------------------------------------------------------------------
 # Registry
 # --------------------------------------------------------------------------
@@ -337,7 +369,7 @@ MATCH_TYPES = {
             ("match_date", "Kick-off", False),
         ],
         "sale_extras": [],
-        "tweets": pl_tweets,
+        "tweets": footered(pl_tweets),
         "events": pl_events,
     },
     "cup_home": {
@@ -353,7 +385,7 @@ MATCH_TYPES = {
             ("match_date", "Kick-off", False),
         ],
         "sale_extras": [],
-        "tweets": cup_tweets,
+        "tweets": footered(cup_tweets),
         "events": cup_events,
     },
     "league_away": {
@@ -365,7 +397,7 @@ MATCH_TYPES = {
             ("match_date", "Kick-off", False),
         ],
         "sale_extras": [],
-        "tweets": away_tweets,
+        "tweets": footered(away_tweets),
         "events": away_events,
     },
     "euro_away": {
@@ -374,7 +406,7 @@ MATCH_TYPES = {
         "prompt": CL_PROMPT,
         "dates": [("match_date", "Kick-off", False)],
         "sale_extras": ["info", "forwarding_deadline"],
-        "tweets": cl_tweets,
+        "tweets": footered(cl_tweets),
         "events": cl_events,
     },
 }
