@@ -147,9 +147,10 @@ def fetch_page(url):
     response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "html.parser")
+    # Collect links before stripping the page chrome — the ticket-info link can live in a header block.
+    links = [a.get("href") for a in soup.find_all("a") if a.get("href")]
     for tag in soup(["script", "style", "nav", "footer", "header"]):
         tag.extract()
-    links = [a.get("href") for a in soup.find_all("a") if a.get("href")]
     page_text = " ".join(soup.get_text().split())
     if len(page_text) < MIN_PAGE_TEXT:
         raise ValueError(
@@ -174,15 +175,28 @@ def gather_pages(url, extra_url=None, force=False):
         if link not in others:
             others.append(link)
 
+    def page_info(page_url, page):
+        text = page["text"]
+        return {
+            "url": page_url,
+            "chars": len(text),
+            "mentions_acs": bool(re.search(r"\bACS\b|auto cup", text, re.IGNORECASE)),
+            "ticket_info_links": sorted({h for h in page["links"] if "ticket-info" in h})[:10],
+        }
+
     parts, sources, warnings = [f"=== MAIN PAGE: {url} ===\n{main['text']}"], [url], []
+    pages = [page_info(url, main)]
     for other in others[:2]:
         try:
             if force:
                 fetch_page.clear(other)
-            parts.append(f"=== ADDITIONAL PAGE (same match): {other} ===\n{fetch_page(other)['text']}")
+            page = fetch_page(other)
+            parts.append(f"=== ADDITIONAL PAGE (same match): {other} ===\n{page['text']}")
             sources.append(other)
+            pages.append(page_info(other, page))
         except Exception as e:  # the main page is enough to carry on
             warnings.append(f"Couldn't read {other} ({e}) — carried on with the main page.")
+    st.session_state.scan_pages = pages
     return "\n\n".join(parts), sources, warnings
 
 
@@ -424,6 +438,20 @@ def render_details_step(match):
     st.caption(f"{detected}: **{cfg['label']}**. Wrong type? Pick the right one above and scan again.")
     if len(match.get("sources", [])) > 1:
         st.caption("Read " + " + ".join(f"[page {i + 1}]({u})" for i, u in enumerate(match["sources"])))
+    pages = st.session_state.get("scan_pages") if match.get("sources") else None
+    if pages:
+        with st.expander(f"🔎 What the scan read ({len(pages)} page{'s' if len(pages) != 1 else ''})"):
+            for i, pg in enumerate(pages, 1):
+                st.markdown(
+                    f"**Page {i}:** {pg['url']}  \n"
+                    f"{pg['chars']:,} characters of text · mentions ACS: {'✅ yes' if pg['mentions_acs'] else '❌ no'}"
+                )
+                if pg["ticket_info_links"]:
+                    st.caption("Ticket-info links on this page: " + ", ".join(pg["ticket_info_links"]))
+                else:
+                    st.caption("No ticket-info links found on this page.")
+            if len(pages) == 1:
+                st.caption("Only one page was read. Paste the ticket-info page into **Extra info page** and scan again.")
 
     details = {}
     with st.container(border=True):
