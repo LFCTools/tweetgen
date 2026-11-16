@@ -25,12 +25,19 @@ from helpers import (
     to_display,
     tweet_length,
 )
-from templates import CLASSIFY_PROMPT, MATCH_TYPES
+from datetime import timedelta
+from pathlib import Path
+
+from templates import CLASSIFY_PROMPT, IMAGES, MATCH_TYPES
 
 GEMINI_MODEL = "gemini-2.5-flash"
 PAGE_TEXT_LIMIT = 40000
 MIN_PAGE_TEXT = 300
 AUTO = "auto"
+IMAGES_DIR = Path(__file__).parent / "images"
+# Public URL Buffer fetches images from. The repo is public, so GitHub serves the files in images/.
+DEFAULT_IMAGE_BASE_URL = "https://raw.githubusercontent.com/LFCTools/tweetgen/main/images/"
+NO_IMAGE = "none"
 PREMIUM_LIMIT = 25000  # X Premium post length; set X_CHAR_LIMIT = 280 in secrets for a standard account
 
 
@@ -47,6 +54,13 @@ def secret(name):
 # ==========================================
 # EXTERNAL SERVICES
 # ==========================================
+def image_url(image_key):
+    if not image_key or image_key == NO_IMAGE:
+        return None
+    base = secret("IMAGE_BASE_URL") or DEFAULT_IMAGE_BASE_URL
+    return base.rstrip("/") + "/" + IMAGES[image_key][1]
+
+
 def char_limit():
     try:
         return int(secret("X_CHAR_LIMIT") or PREMIUM_LIMIT)
@@ -54,8 +68,8 @@ def char_limit():
         return PREMIUM_LIMIT
 
 
-def schedule_to_buffer(text, scheduled_at_local):
-    """Queue a post in Buffer. `scheduled_at_local` is a naive UK-time datetime."""
+def schedule_to_buffer(text, scheduled_at_local, image=None):
+    """Queue a post in Buffer. `scheduled_at_local` is a naive UK-time datetime, `image` a public URL."""
     api_key, channel_id = secret("BUFFER_API_KEY"), secret("BUFFER_CHANNEL_ID")
     if not api_key:
         return False, "BUFFER_API_KEY is missing from Streamlit secrets."
@@ -86,6 +100,8 @@ def schedule_to_buffer(text, scheduled_at_local):
             "dueAt": buffer_due_at(scheduled_at_local),
         }
     }
+    if image:
+        variables["input"]["assets"] = [{"image": {"url": image}}]
     try:
         response = requests.post(
             "https://api.buffer.com",
@@ -463,18 +479,33 @@ def render_tweets_step(tweets, cal_prefix):
             else:
                 st.caption(f"≈ {length}/{limit} characters (links count as 23, emoji and • as 2)")
 
-            include = True
-            if t["buffer"]:
-                include = st.checkbox("Include in Buffer schedule", value=True, key=f"inc_{sid}_{t['title']}")
+            image_options = [NO_IMAGE, *IMAGES]
+            image = st.selectbox(
+                "Image",
+                image_options,
+                index=image_options.index(t["image"]) if t["image"] in IMAGES else 0,
+                format_func=lambda k: "No image" if k == NO_IMAGE else IMAGES[k][0],
+                key=f"img_{sid}_{t['title']}",
+            )
+            if image != NO_IMAGE and (IMAGES_DIR / IMAGES[image][1]).exists():
+                st.image(str(IMAGES_DIR / IMAGES[image][1]), width="stretch")
+
+            if t["immediate"]:
+                include = st.checkbox(
+                    "Send to Buffer now (posts about 2 minutes after you press Schedule)",
+                    value=False,
+                    key=f"inc_{sid}_{t['title']}",
+                )
+                st.caption("Or post it yourself — the X button below can't attach the image, so add it by hand.")
             else:
-                st.caption("Post this one yourself now with the button below — it isn't sent to Buffer.")
+                include = st.checkbox("Include in Buffer schedule", value=True, key=f"inc_{sid}_{t['title']}")
 
             c1, c2 = st.columns(2)
             c1.link_button("🌐 Post on X now", get_x_intent_url(text), width="stretch")
             dt = parse_to_datetime(t["when"])
             if dt:
                 c2.link_button("📅 Calendar reminder", gcal_url(f"{cal_prefix}: {t['title']}", dt), width="stretch")
-        final.append({**t, "text": text, "include": include})
+        final.append({**t, "text": text, "include": include, "image": None if image == NO_IMAGE else image})
     return final
 
 
@@ -490,11 +521,10 @@ def render_schedule_step(tweets, match_name, events):
         st.markdown("**⚡ Buffer**")
         rows, to_send = [], []
         for t in tweets:
-            if not t["buffer"]:
-                continue
-            dt = parse_to_datetime(t["when"])
+            immediate = t["immediate"]
+            dt = now + timedelta(minutes=2) if immediate else parse_to_datetime(t["when"])
             length = tweet_length(t["text"])
-            tid = f"{match_name}|{t['title']}|{dt.isoformat() if dt else ''}"
+            tid = f"{match_name}|{t['title']}|" + ("now" if immediate else (dt.isoformat() if dt else ""))
             if tid in scheduled:
                 status = "✅ Sent"
             elif not t["include"]:
@@ -511,9 +541,10 @@ def render_schedule_step(tweets, match_name, events):
             rows.append(
                 {
                     "": status,
-                    "When (UK)": format_datetime(dt).replace(":00", "") if dt else TBA,
+                    "When (UK)": "Now" if immediate else (format_datetime(dt).replace(":00", "") if dt else TBA),
+                    "🖼️": "✓" if t["image"] else "",
                     "Tweet": t["title"],
-                    "UTC": buffer_due_at(dt)[11:16] if dt else "—",
+                    "UTC": "—" if immediate or not dt else buffer_due_at(dt)[11:16],
                 }
             )
         if rows:
@@ -531,7 +562,9 @@ def render_schedule_step(tweets, match_name, events):
             prog = st.progress(0.0)
             ok_count, errors = 0, []
             for idx, (t, dt, tid) in enumerate(to_send):
-                ok, msg = schedule_to_buffer(t["text"], dt)
+                if t["immediate"]:
+                    dt = now_uk() + timedelta(minutes=2)
+                ok, msg = schedule_to_buffer(t["text"], dt, image=image_url(t["image"]))
                 if ok:
                     ok_count += 1
                     scheduled.add(tid)

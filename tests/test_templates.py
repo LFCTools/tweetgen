@@ -110,3 +110,43 @@ def test_links_time_only():
     assert links_from_time("Fri 20 Nov, 11:00am") == "10:30am"
     assert links_from_time("Fri 20 Nov, 12:15pm") == "11:45am"
     assert links_from_time("TBA") == "TBA"
+
+
+# --- images ---------------------------------------------------------------
+def _image_by_title(match_type):
+    tab = OLD_TAB[match_type]
+    return {t["title"]: t["image"] for t in MATCH_TYPES[match_type]["tweets"](details_from(match_type, FAKES[tab]))}
+
+
+def test_pl_images():
+    imgs = _image_by_title("pl_home")
+    assert imgs["📢 Sales Detail Announcement"] == "sales_details"
+    assert imgs["📝 Registration Opening Notice"] == imgs["⏰ Registration Closing Reminder"] == "registration"
+    assert imgs["🗳️ Ballots Opening"] == imgs["⏰ Ballots Closing Reminder"] == imgs["✨ Local & YA Ballot Results"] == "local_ya_ballot"
+    assert imgs["🎟️ Sale Opening (All Members)"] == imgs["⏰ Sale Closing (All Members)"] == "sale_reminder"
+
+
+def test_cup_images():
+    imgs = _image_by_title("cup_home")
+    assert imgs["📢 Cup Sales Announcement"] == "sales_details"
+    assert imgs["🗳️ Local Ballot Opening"] == imgs["⏰ Local Ballot Closing"] == "local_ballot"
+    assert all(v == "sale_reminder" for k, v in imgs.items() if "Sale Opening" in k or "Sale Closing" in k)
+
+
+@pytest.mark.parametrize("match_type", ["league_away", "euro_away"])
+def test_away_images(match_type):
+    for title, image in _image_by_title(match_type).items():
+        if "Announcement" in title:
+            assert image == "sales_details"
+        elif "Sale Opening" in title or "Sale Closing" in title:
+            assert image == "sale_reminder"
+        elif "Forwarding" in title:
+            assert image is None
+
+
+def test_image_files_exist():
+    from templates import IMAGES
+    images_dir = Path(__file__).resolve().parent.parent / "images"
+    for _, filename in IMAGES.values():
+        f = images_dir / filename
+        assert f.exists() and f.stat().st_size < 5_000_000, filename

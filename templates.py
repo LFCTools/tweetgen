@@ -16,6 +16,15 @@ BALLOTS_URL = "https://ticketing.liverpoolfc.com/tickets/ballots"
 # Added to the bottom of every tweet.
 FOOTER = "Make sure you're following this account for all ticket reminders & updates 🔔\n\n#lfc #liverpoolfc #lfctickets #anfield"
 
+# Images attached to tweets when they're sent to Buffer (files live in images/).
+IMAGES = {
+    "sales_details": ("Sales details announced", "sales-details.jpg"),
+    "registration": ("Registration", "registration.jpg"),
+    "local_ya_ballot": ("Local/YA ballot", "local-ya-ballot.jpg"),
+    "local_ballot": ("Local ballot", "local-ballot.jpg"),
+    "sale_reminder": ("Sale reminder", "sale-reminder.jpg"),
+}
+
 # A sale that closes within this long of opening gets no separate closing reminder.
 SHORT_SALE = timedelta(hours=4)
 
@@ -128,9 +137,13 @@ Source Text: <<PAGE_TEXT>>
 # --------------------------------------------------------------------------
 # Small builders
 # --------------------------------------------------------------------------
-def tweet(title, when, text, buffer=True):
-    """A timeline item. `when` is the display string for when it should be posted."""
-    return {"title": title, "when": when, "text": text, "buffer": buffer}
+def tweet(title, when, text, image=None, immediate=False):
+    """A timeline item.
+
+    `when` is the display string for when it should be posted, `image` a key of IMAGES,
+    and `immediate` marks the announcement that is posted straight away rather than scheduled.
+    """
+    return {"title": title, "when": when, "text": text, "image": image, "immediate": immediate}
 
 
 def event(label, name, time, all_day=False):
@@ -157,7 +170,7 @@ def sale_close_reminder(match_prefix, tier, close, open_=None):
     if not is_set(close) or is_short_sale(open_, close):
         return None
     text = f"""{match_prefix} ⏰\n\nSale Closing Reminder ({tier})\n• Closes: {today_label(close)}"""
-    return tweet(f"⏰ Sale Closing ({tier})", get_offset_time(close, hours_before=1), text)
+    return tweet(f"⏰ Sale Closing ({tier})", get_offset_time(close, hours_before=1), text, image="sale_reminder")
 
 
 def sale_events(match_prefix, sales):
@@ -189,17 +202,17 @@ def pl_tweets(d):
     ballots_res_tweet = f"""{name} (H) - Local & YA Ballots 📢\n\nLocal & YA Ballot Results 🗳️\n• Results today\n• Ensure you have funds in your bank \n\nComment below if successful 👇"""
 
     tweets = [
-        tweet("📢 Sales Detail Announcement", IMMEDIATE, announcement, buffer=False),
-        tweet("📝 Registration Opening Notice", r_open, reg_open_tweet),
-        tweet("⏰ Registration Closing Reminder", get_offset_time(r_close, 1), reg_close_tweet),
-        tweet("🗳️ Ballots Opening", b_open, ballots_open_tweet),
-        tweet("⏰ Ballots Closing Reminder", get_offset_time(b_close, 1), ballots_close_tweet),
-        tweet("✨ Local & YA Ballot Results", get_results_day_morning(b_res), ballots_res_tweet),
+        tweet("📢 Sales Detail Announcement", IMMEDIATE, announcement, image="sales_details", immediate=True),
+        tweet("📝 Registration Opening Notice", r_open, reg_open_tweet, image="registration"),
+        tweet("⏰ Registration Closing Reminder", get_offset_time(r_close, 1), reg_close_tweet, image="registration"),
+        tweet("🗳️ Ballots Opening", b_open, ballots_open_tweet, image="local_ya_ballot"),
+        tweet("⏰ Ballots Closing Reminder", get_offset_time(b_close, 1), ballots_close_tweet, image="local_ya_ballot"),
+        tweet("✨ Local & YA Ballot Results", get_results_day_morning(b_res), ballots_res_tweet, image="local_ya_ballot"),
     ]
     for s in sales:
         link_time = links_from_time(s["open"])
         rem_tweet = f"""{name} (H) - {s['tier']} 📢\n\n{s['tier']} 🎟️\n• Opens: {today_label(s['open'])}\n• Click unique links from {link_time}\n\nHallmap link  👇\n{hallmap_url}"""
-        tweets.append(tweet(f"🎟️ Sale Opening ({s['tier']})", get_offset_time(s["open"], 1), rem_tweet))
+        tweets.append(tweet(f"🎟️ Sale Opening ({s['tier']})", get_offset_time(s["open"], 1), rem_tweet, image="sale_reminder"))
         close = sale_close_reminder(f"{name} (H)", s["tier"], s["close"], s["open"])
         if close:
             tweets.append(close)
@@ -232,21 +245,23 @@ def cup_tweets(d):
     announcement = f"""{name} (H) - Sale Details 📢\n\n{sales_text}Local Ballot 🗳️\n• Opens: {b_open}\n• Closes: {b_close}\n• Results: {b_res}\n\nACS Payment Run 💰\n• {acs_start} - {acs_end}\n\nMatch Date • {m_date} 🏟️"""
 
     tweets = [
-        tweet("📢 Cup Sales Announcement", IMMEDIATE, announcement, buffer=False),
+        tweet("📢 Cup Sales Announcement", IMMEDIATE, announcement, image="sales_details", immediate=True),
         tweet(
             "🗳️ Local Ballot Opening",
             b_open,
             f"""{name} (H) - Local Ballot 📢\n\nLocal Ballot 🗳️\n• Opens: Now\n• Closes: {b_close}\n\n{BALLOTS_URL}""",
+            image="local_ballot",
         ),
         tweet(
             "⏰ Local Ballot Closing",
             get_offset_time(b_close, 1),
             f"""{name} (H) - Local Ballot 📢\n\nLocal Ballot 🗳️\n• Opens: Now\n• Closes: {today_label(b_close)}\n\n{BALLOTS_URL}""",
+            image="local_ballot",
         ),
     ]
     for s in sales:
         open_tweet = f"""{name} ({comp})  🎟️\n\nSale ({s['tier']})\n• Opens: {today_label(s['open'])}\n• Closes: {s['close']}\n\nNo registration needed, pre-queue starts 30 minutes before."""
-        tweets.append(tweet(f"🎟️ Sale Opening ({s['tier']})", get_offset_time(s["open"], 1), open_tweet))
+        tweets.append(tweet(f"🎟️ Sale Opening ({s['tier']})", get_offset_time(s["open"], 1), open_tweet, image="sale_reminder"))
         close = sale_close_reminder(f"{name} ({comp})", s["tier"], s["close"], s["open"])
         if close:
             tweets.append(close)
@@ -274,10 +289,10 @@ def away_tweets(d):
     blocks = "\n\n".join(f"Sale ({s['tier']})\n• Opens: {s['open']}\n• Closes: {s['close']}" for s in sales)
     announcement = f"""{name} (A) - Sale Details 📢\n\n{blocks}\n\nMatch Date • {m_date} 🏟️"""
 
-    tweets = [tweet("📢 Sales Detail Announcement", IMMEDIATE, announcement, buffer=False)]
+    tweets = [tweet("📢 Sales Detail Announcement", IMMEDIATE, announcement, image="sales_details", immediate=True)]
     for s in sales:
         sale_tweet = f"""{name} (A) 🎟️\n\nSale ({s['tier']})\n• Opens: {today_label(s['open'])}\n• Closes: {s['close']}\n• Guaranteed Sale"""
-        tweets.append(tweet(f"🎟️ Sale Opening ({s['tier']})", get_offset_time(s["open"], 1), sale_tweet))
+        tweets.append(tweet(f"🎟️ Sale Opening ({s['tier']})", get_offset_time(s["open"], 1), sale_tweet, image="sale_reminder"))
         close = sale_close_reminder(f"{name} (A)", s["tier"], s["close"], s["open"])
         if close:
             tweets.append(close)
@@ -314,12 +329,12 @@ def cl_tweets(d):
     blocks_text = "\n\n".join(blocks)
     announcement = f"""{name} (A) - Sale Details 📢\n\n{blocks_text}\n\nMatch Date • {m_date} 🏟️"""
 
-    tweets = [tweet("📢 CL Away Sales Details Announcement", IMMEDIATE, announcement, buffer=False)]
+    tweets = [tweet("📢 CL Away Sales Details Announcement", IMMEDIATE, announcement, image="sales_details", immediate=True)]
     for s in sales:
         info = s.get("info", "").strip()
         info_line = f"• {info}\n" if info else ""
         sale_tweet = f"""{name} (A) 🎟️\n\nSale ({s['tier']})\n• Opens: {today_label(s['open'])}\n• Closes: {s['close'].replace(',', ' -')}\n{info_line}"""
-        tweets.append(tweet(f"🎟️ Sale Opening ({s['tier']})", get_offset_time(s["open"], 1), sale_tweet))
+        tweets.append(tweet(f"🎟️ Sale Opening ({s['tier']})", get_offset_time(s["open"], 1), sale_tweet, image="sale_reminder"))
         close = sale_close_reminder(f"{name} (A)", s["tier"], s["close"], s["open"])
         if close:
             tweets.append(close)

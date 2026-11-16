@@ -26,6 +26,7 @@ Code layout: `app.py` (UI), `templates.py` (match types, prompts, tweet wording)
 GEMINI_API_KEY = "..."
 BUFFER_API_KEY = "..."
 BUFFER_CHANNEL_ID = "..."   # required – the Buffer channel to post to
+# IMAGE_BASE_URL = "..."    # optional – where Buffer fetches images (defaults to this repo's images/ on GitHub)
 # X_CHAR_LIMIT = 280        # optional – defaults to 25000 (X Premium); set 280 for a standard account
 ```
 
@@ -48,6 +49,9 @@ pytest
 - All times are treated as UK time (Europe/London) and converted to UTC only when
   sent to Buffer, so reminders are correct during both GMT and BST.
 - Every tweet ends with the follow line + hashtags (`FOOTER` in `templates.py`).
+- Images in `images/` are attached to tweets sent to Buffer (mapping in `IMAGES` in
+  `templates.py`). To change one, replace the file on GitHub with the same name.
+  Buffer fetches them from GitHub, so they must be on the `main` branch.
 - Sales that close within 4 hours of opening get no separate closing reminder.
 - Reminders with a TBA time, a time in the past, or text over the X character
   limit are skipped rather than posted immediately. Each reminder is sent once per session.
