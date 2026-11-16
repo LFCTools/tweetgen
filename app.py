@@ -711,8 +711,13 @@ def render_channel(channel, tweets, match_name, match_label):
             else:
                 reason = None
 
-            when = "posts now" if immediate else format_datetime(dt).replace(":00", "")
-            label = f"{t['title']} · {when if dt else TBA}{' 🖼️' if t['image'] else ''}"
+            if immediate:
+                when = "posts now"
+            elif dt:
+                when = format_datetime(dt).replace(":00", "")
+            else:
+                when = TBA
+            label = f"{t['title']} · {when}{' 🖼️' if t['image'] else ''}"
             if reason:
                 label += f" — {reason}"
             include = st.checkbox(
